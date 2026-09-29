@@ -2,127 +2,187 @@ import { describe, expect, it, vi } from "vitest";
 import { BinanceHistoricalDataProvider } from "../../src/data/providers/binance.js";
 
 describe("BinanceHistoricalDataProvider", () => {
-  it("converts Binance klines into Candle objects", async () => {
-    const response = [
-      [
-        1000,
-        "100.00",
-        "105.00",
-        "99.00",
-        "103.00",
-        "42.50",
-        1999,
-        "0",
-        10,
-        "0",
-        "0",
-        "0"
-      ]
-    ];
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify(response), {
-          status: 200
-        })
-      )
-    );
+  it("converts Binance klines to Candle", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify([
+            [
+              1000,
+              "100.5",
+              "101.5",
+              "99.5",
+              "101",
+              "12.5",
+              2000,
+              "1260",
+              13,
+              "50",
+              "5000",
+              "0"
+            ]
+          ]),
+          { status: 200 }
+        )
+      );
 
     const provider = new BinanceHistoricalDataProvider();
 
-    const candles = await provider.getCandles(
-      "BTCUSDT",
-      "15m",
-      1
-    );
+    const candles = await provider.getCandles({
+      symbol: "BTCUSDT",
+      timeframe: "15m",
+      limit: 1
+    });
 
     expect(candles).toEqual([
       {
         timestamp: 1000,
-        open: 100,
-        high: 105,
-        low: 99,
-        close: 103,
-        volume: 42.5
+        open: 100.5,
+        high: 101.5,
+        low: 99.5,
+        close: 101,
+        volume: 12.5
       }
     ]);
+
+    fetchMock.mockRestore();
   });
 
-  it("normalizes the symbol to uppercase", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response("[]", {
-        status: 200
-      })
-    );
-
-    vi.stubGlobal("fetch", fetchMock);
+  it("normalizes symbol to uppercase", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response("[]", { status: 200 })
+      );
 
     const provider = new BinanceHistoricalDataProvider();
 
-    await provider.getCandles("btcusdt", "15m", 100);
+    await provider.getCandles({
+      symbol: "btcusdt",
+      timeframe: "15m",
+      limit: 10
+    });
 
-    const request = fetchMock.mock.calls[0]?.[0];
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    expect(request).toBeInstanceOf(URL);
-
-    const url = request as URL;
+    const [request] = fetchMock.mock.calls[0] ?? [];
+    const url = new URL(String(request));
 
     expect(url.searchParams.get("symbol")).toBe("BTCUSDT");
-    expect(url.searchParams.get("interval")).toBe("15m");
-    expect(url.searchParams.get("limit")).toBe("100");
+
+    fetchMock.mockRestore();
+  });
+
+  it("passes endTime when provided", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response("[]", { status: 200 })
+      );
+
+    const provider = new BinanceHistoricalDataProvider();
+
+    await provider.getCandles({
+      symbol: "BTCUSDT",
+      timeframe: "15m",
+      limit: 1000,
+      endTime: 123456789
+    });
+
+    const [request] = fetchMock.mock.calls[0] ?? [];
+    const url = new URL(String(request));
+
+    expect(url.searchParams.get("endTime")).toBe(
+      "123456789"
+    );
+
+    fetchMock.mockRestore();
   });
 
   it("rejects failed HTTP responses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
         new Response("Bad request", {
           status: 400,
           statusText: "Bad Request"
         })
-      )
-    );
+      );
 
     const provider = new BinanceHistoricalDataProvider();
 
     await expect(
-      provider.getCandles("BTCUSDT", "15m", 100)
+      provider.getCandles({
+        symbol: "BTCUSDT",
+        timeframe: "15m",
+        limit: 10
+      })
     ).rejects.toThrow(
       "Binance historical data request failed: 400 Bad Request"
     );
+
+    fetchMock.mockRestore();
   });
 
   it("rejects malformed kline responses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify([["invalid"]]), {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(JSON.stringify(["invalid"]), {
           status: 200
         })
-      )
-    );
+      );
 
     const provider = new BinanceHistoricalDataProvider();
 
     await expect(
-      provider.getCandles("BTCUSDT", "15m", 100)
+      provider.getCandles({
+        symbol: "BTCUSDT",
+        timeframe: "15m",
+        limit: 10
+      })
     ).rejects.toThrow("Invalid Binance kline entry.");
+
+    fetchMock.mockRestore();
   });
 
   it("rejects invalid request parameters", async () => {
     const provider = new BinanceHistoricalDataProvider();
 
     await expect(
-      provider.getCandles("", "15m", 100)
+      provider.getCandles({
+        symbol: "",
+        timeframe: "15m",
+        limit: 10
+      })
     ).rejects.toThrow("Symbol is required.");
 
     await expect(
-      provider.getCandles("BTCUSDT", "", 100)
+      provider.getCandles({
+        symbol: "BTCUSDT",
+        timeframe: "",
+        limit: 10
+      })
     ).rejects.toThrow("Timeframe is required.");
 
     await expect(
-      provider.getCandles("BTCUSDT", "15m", 0)
+      provider.getCandles({
+        symbol: "BTCUSDT",
+        timeframe: "15m",
+        limit: 0
+      })
     ).rejects.toThrow("Limit must be a positive integer.");
+
+    await expect(
+      provider.getCandles({
+        symbol: "BTCUSDT",
+        timeframe: "15m",
+        limit: 10,
+        endTime: -1
+      })
+    ).rejects.toThrow(
+      "End time must be a valid timestamp."
+    );
   });
 });
