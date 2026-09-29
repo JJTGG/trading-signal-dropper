@@ -143,22 +143,39 @@ export async function startBot(): Promise<void> {
           continue;
         }
 
-        let response: string;
+        try {
+          let response: string;
 
-        if (command === "/signal") {
-          response = await handleSignalCommand(
-            parts.slice(1),
-            provider
+          if (command === "/signal") {
+            response = await handleSignalCommand(
+              parts.slice(1),
+              provider
+            );
+          } else {
+            response = handleCommand(command);
+          }
+
+          await sendMessage(
+            token,
+            message.chat.id,
+            response
           );
-        } else {
-          response = handleCommand(command);
-        }
+        } catch (error) {
+          console.error(
+            `Command failed: ${command}`,
+            error
+          );
 
-        await sendMessage(
-          token,
-          message.chat.id,
-          response
-        );
+          await sendMessage(
+            token,
+            message.chat.id,
+            [
+              "TSD could not process that request.",
+              "",
+              "Check the symbol and timeframe, then try again."
+            ].join("\n")
+          );
+        }
       }
     } catch (error) {
       console.error(
