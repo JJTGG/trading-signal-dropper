@@ -18,6 +18,7 @@ const FAST_EMA_PERIOD = 20;
 const SLOW_EMA_PERIOD = 50;
 const BREAKOUT_LOOKBACK = 20;
 const ATR_PERIOD = 14;
+const CANDLE_DURATION_MS = 15 * 60 * 1000;
 
 type GeneratedSignal = {
   signal: SignalCandidate;
@@ -170,11 +171,20 @@ function classifySameDirectionTrades(
   });
 }
 
-function observeTrades(
+function getEntryIndicators(
   historicalCandles: Candle[],
-  classifiedTrades: ClassifiedTrade[]
-): TradeObservation[] {
-  const closes = historicalCandles.map(
+  candleIndex: number
+): {
+  atr: number;
+  emaSeparation: number;
+  breakoutDistance: number;
+} {
+  const availableCandles = historicalCandles.slice(
+    0,
+    candleIndex + 1
+  );
+
+  const closes = availableCandles.map(
     (candle) => candle.close
   );
 
@@ -189,15 +199,86 @@ function observeTrades(
   );
 
   const atrValues = atr(
-    historicalCandles,
+    availableCandles,
     ATR_PERIOD
   );
 
-  return classifiedTrades.map((trade) => {
-    const candleIndex = historicalCandles.findIndex(
-      (candle) =>
-        candle.timestamp === trade.entryTimestamp
+  const fastEma = fastEmaValues.at(-1);
+  const slowEma = slowEmaValues.at(-1);
+  const currentAtr = atrValues.at(-1);
+  const currentCandle = availableCandles.at(-1);
+
+  if (
+    fastEma === undefined ||
+    slowEma === undefined ||
+    currentAtr === undefined ||
+    currentCandle === undefined
+  ) {
+    throw new Error(
+      `Missing indicator values for entry at ${currentCandle?.timestamp ?? "unknown"}.`
     );
+  }
+
+  const breakoutCandles = availableCandles.slice(
+    -(BREAKOUT_LOOKBACK + 1),
+    -1
+  );
+
+  if (breakoutCandles.length === 0) {
+    throw new Error(
+      `Missing breakout candles for entry at ${currentCandle.timestamp}.`
+    );
+  }
+
+  const recentHigh = Math.max(
+    ...breakoutCandles.map(
+      (candle) => candle.high
+    )
+  );
+
+  const recentLow = Math.min(
+    ...breakoutCandles.map(
+      (candle) => candle.low
+    )
+  );
+
+  const direction =
+    currentCandle.close > recentHigh
+      ? "LONG"
+      : currentCandle.close < recentLow
+        ? "SHORT"
+        : null;
+
+  if (direction === null) {
+    throw new Error(
+      `Could not determine breakout direction for entry at ${currentCandle.timestamp}.`
+    );
+  }
+
+  const breakoutDistance =
+    direction === "LONG"
+      ? currentCandle.close - recentHigh
+      : recentLow - currentCandle.close;
+
+  return {
+    atr: currentAtr,
+    emaSeparation: Math.abs(
+      fastEma - slowEma
+    ),
+    breakoutDistance
+  };
+}
+
+function observeTrades(
+  historicalCandles: Candle[],
+  classifiedTrades: ClassifiedTrade[]
+): TradeObservation[] {
+  return classifiedTrades.map((trade) => {
+    const candleIndex =
+      historicalCandles.findIndex(
+        (candle) =>
+          candle.timestamp === trade.entryTimestamp
+      );
 
     if (candleIndex < 0) {
       throw new Error(
@@ -205,69 +286,21 @@ function observeTrades(
       );
     }
 
-    const entryCandle =
-      historicalCandles[candleIndex];
-
-    if (entryCandle === undefined) {
-      throw new Error(
-        `Entry candle is missing at index ${candleIndex}.`
-      );
-    }
-
-    const currentAtr = atrValues[candleIndex];
-    const fastEma = fastEmaValues[candleIndex];
-    const slowEma = slowEmaValues[candleIndex];
-
-    if (
-      currentAtr === undefined ||
-      fastEma === undefined ||
-      slowEma === undefined
-    ) {
-      throw new Error(
-        `Missing indicator values for entry at ${trade.entryTimestamp}.`
-      );
-    }
-
-    const breakoutCandles = historicalCandles.slice(
-      Math.max(
-        0,
-        candleIndex - BREAKOUT_LOOKBACK
-      ),
+    const {
+      atr: currentAtr,
+      emaSeparation,
+      breakoutDistance
+    } = getEntryIndicators(
+      historicalCandles,
       candleIndex
     );
-
-    if (breakoutCandles.length === 0) {
-      throw new Error(
-        `Missing breakout candles for entry at ${trade.entryTimestamp}.`
-      );
-    }
-
-    const recentHigh = Math.max(
-      ...breakoutCandles.map(
-        (candle) => candle.high
-      )
-    );
-
-    const recentLow = Math.min(
-      ...breakoutCandles.map(
-        (candle) => candle.low
-      )
-    );
-
-    const emaSeparation = Math.abs(
-      fastEma - slowEma
-    );
-
-    const breakoutDistance =
-      trade.direction === "LONG"
-        ? trade.signal.entry - recentHigh
-        : recentLow - trade.signal.entry;
 
     const durationMilliseconds =
       trade.exitTimestamp - trade.entryTimestamp;
 
     const durationCandles =
-      durationMilliseconds / (15 * 60 * 1000);
+      durationMilliseconds /
+      CANDLE_DURATION_MS;
 
     return {
       ...trade,
