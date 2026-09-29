@@ -57,6 +57,48 @@ const result = validateStrategy(
   strategy
 );
 
+const resolvedTrades = result.backtest.trades;
+
+const overlappingTrades = [];
+
+for (let i = 0; i < resolvedTrades.length; i += 1) {
+  const currentTrade = resolvedTrades[i];
+
+  if (currentTrade === undefined) {
+    continue;
+  }
+
+  for (
+    let j = i + 1;
+    j < resolvedTrades.length;
+    j += 1
+  ) {
+    const otherTrade = resolvedTrades[j];
+
+    if (otherTrade === undefined) {
+      continue;
+    }
+
+    const currentStartsBeforeOtherEnds =
+      currentTrade.entryTimestamp <
+      otherTrade.exitTimestamp;
+
+    const otherStartsBeforeCurrentEnds =
+      otherTrade.entryTimestamp <
+      currentTrade.exitTimestamp;
+
+    if (
+      currentStartsBeforeOtherEnds &&
+      otherStartsBeforeCurrentEnds
+    ) {
+      overlappingTrades.push({
+        first: currentTrade,
+        second: otherTrade
+      });
+    }
+  }
+}
+
 console.log("");
 console.log("Historical dataset");
 console.log("------------------");
@@ -78,125 +120,56 @@ console.log("");
 console.log("Backtest");
 console.log("--------");
 console.log(
-  `Trades: ${result.backtest.trades.length}`
+  `Trades: ${resolvedTrades.length}`
 );
 console.log(
   `Unresolved signals: ${result.backtest.unresolvedSignals.length}`
 );
 
-if (result.backtest.unresolvedSignals.length > 0) {
-  console.log("");
-  console.log("Unresolved signals");
-  console.log("------------------");
+console.log("");
+console.log("Overlap audit");
+console.log("-------------");
+console.log(
+  `Overlapping resolved trade pairs: ${overlappingTrades.length}`
+);
 
+if (overlappingTrades.length > 0) {
   for (
-    const unresolved of result.backtest.unresolvedSignals
+    const overlap of overlappingTrades
   ) {
-    const {
-      signal,
-      signalTimestamp
-    } = unresolved;
-
-    const signalIndex = candles.findIndex(
-      (candle) =>
-        candle.timestamp === signalTimestamp
-    );
-
-    const futureCandles =
-      signalIndex === -1
-        ? []
-        : candles.slice(signalIndex + 1);
-
-    const finalFutureCandle =
-      futureCandles.at(-1);
-
-    const highestHigh =
-      futureCandles.length > 0
-        ? Math.max(
-            ...futureCandles.map(
-              (candle) => candle.high
-            )
-          )
-        : null;
-
-    const lowestLow =
-      futureCandles.length > 0
-        ? Math.min(
-            ...futureCandles.map(
-              (candle) => candle.low
-            )
-          )
-        : null;
-
-    const tp2Progress =
-      highestHigh === null
-        ? null
-        : (
-            (highestHigh - signal.entry) /
-            (signal.takeProfits[1] - signal.entry)
-          ) * 100;
-
-    const stopDistance =
-      lowestLow === null
-        ? null
-        : (
-            (signal.entry - lowestLow) /
-            (signal.entry - signal.stopLoss)
-          ) * 100;
-
     console.log("");
+
     console.log(
-      `Timestamp: ${new Date(
-        signalTimestamp
+      `First trade: ${new Date(
+        overlap.first.entryTimestamp
+      ).toISOString()} → ${new Date(
+        overlap.first.exitTimestamp
       ).toISOString()}`
     );
-    console.log(`Direction: ${signal.direction}`);
-    console.log(`Entry: ${signal.entry}`);
-    console.log(`Stop loss: ${signal.stopLoss}`);
-    console.log(
-      `Take profits: ${signal.takeProfits.join(", ")}`
-    );
-    console.log(
-      `Future candles: ${futureCandles.length}`
-    );
-
-    if (finalFutureCandle !== undefined) {
-      console.log(
-        `Final future candle: ${new Date(
-          finalFutureCandle.timestamp
-        ).toISOString()}`
-      );
-      console.log(
-        `Final OHLC: ${finalFutureCandle.open} / ${finalFutureCandle.high} / ${finalFutureCandle.low} / ${finalFutureCandle.close}`
-      );
-    }
 
     console.log(
-      `Highest high after signal: ${highestHigh ?? "N/A"}`
-    );
-    console.log(
-      `Lowest low after signal: ${lowestLow ?? "N/A"}`
+      `  Direction: ${overlap.first.signal.direction}`
     );
 
     console.log(
-      `TP2 progress: ${
-        tp2Progress === null
-          ? "N/A"
-          : `${tp2Progress.toFixed(2)}%`
-      }`
+      `  R: ${overlap.first.rMultiple}`
     );
 
     console.log(
-      `Stop distance reached: ${
-        stopDistance === null
-          ? "N/A"
-          : `${stopDistance.toFixed(2)}%`
-      }`
+      `Second trade: ${new Date(
+        overlap.second.entryTimestamp
+      ).toISOString()} → ${new Date(
+        overlap.second.exitTimestamp
+      ).toISOString()}`
     );
 
-    console.log(`Strategy: ${signal.strategy}`);
-    console.log(`Timeframe: ${signal.timeframe}`);
-    console.log(`Reason: ${signal.reason}`);
+    console.log(
+      `  Direction: ${overlap.second.signal.direction}`
+    );
+
+    console.log(
+      `  R: ${overlap.second.rMultiple}`
+    );
   }
 }
 
