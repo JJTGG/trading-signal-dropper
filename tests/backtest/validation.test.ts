@@ -19,12 +19,32 @@ function createHistoricalCandles(): Candle[] {
     });
   }
 
+  // Breakout candle.
   candles.push({
     timestamp: 50,
     open: 149.5,
     high: 154,
     low: 149,
     close: 153,
+    volume: 1000
+  });
+
+  // Future candles used by the trade simulator.
+  candles.push({
+    timestamp: 51,
+    open: 153,
+    high: 154,
+    low: 152,
+    close: 153.5,
+    volume: 1000
+  });
+
+  candles.push({
+    timestamp: 52,
+    open: 153.5,
+    high: 158,
+    low: 153,
+    close: 157,
     volume: 1000
   });
 
@@ -38,7 +58,7 @@ describe("validateStrategy", () => {
 
     const result = validateStrategy(candles, strategy);
 
-    expect(result.candles).toBe(51);
+    expect(result.candles).toBe(53);
     expect(result.backtest.trades.length).toBeGreaterThan(0);
     expect(result.metrics.totalTrades).toBeGreaterThan(0);
     expect(result.metrics.winningTrades).toBeGreaterThan(0);
