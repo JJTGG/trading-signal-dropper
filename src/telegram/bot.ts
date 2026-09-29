@@ -34,17 +34,21 @@ async function telegramRequest<T>(
   method: string,
   body?: Record<string, unknown>
 ): Promise<T> {
+  const requestInit: RequestInit = body
+    ? {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+      }
+    : {
+        method: "GET"
+      };
+
   const response = await fetch(
     `${TELEGRAM_API}/bot${token}/${method}`,
-    {
-      method: body ? "POST" : "GET",
-      headers: body
-        ? {
-            "Content-Type": "application/json"
-          }
-        : undefined,
-      body: body ? JSON.stringify(body) : undefined
-    }
+    requestInit
   );
 
   if (!response.ok) {
