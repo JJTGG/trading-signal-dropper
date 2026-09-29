@@ -79,7 +79,8 @@ describe("runBacktest", () => {
 
   it("tracks signals that remain unresolved", () => {
     const unresolvedSignal: SignalCandidate = {
-      ...signal
+      ...signal,
+      takeProfits: [104, 110]
     };
 
     const strategy: Strategy = {
