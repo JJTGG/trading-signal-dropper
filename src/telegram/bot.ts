@@ -1,4 +1,6 @@
+import { BinanceHistoricalDataProvider } from "../data/providers/binance.js";
 import { handleCommand } from "./commands.js";
+import { handleSignalCommand } from "./signal.js";
 
 type TelegramUpdate = {
   update_id: number;
@@ -103,6 +105,7 @@ function sleep(milliseconds: number): Promise<void> {
 
 export async function startBot(): Promise<void> {
   const token = getToken();
+  const provider = new BinanceHistoricalDataProvider();
 
   let offset = 0;
 
@@ -129,16 +132,27 @@ export async function startBot(): Promise<void> {
           continue;
         }
 
-        const command = text
+        const parts = text
           .trim()
-          .split(/\s+/)[0]
+          .split(/\s+/);
+
+        const command = parts[0]
           ?.toLowerCase();
 
         if (command === undefined) {
           continue;
         }
 
-        const response = handleCommand(command);
+        let response: string;
+
+        if (command === "/signal") {
+          response = await handleSignalCommand(
+            parts.slice(1),
+            provider
+          );
+        } else {
+          response = handleCommand(command);
+        }
 
         await sendMessage(
           token,
