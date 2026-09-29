@@ -8,9 +8,14 @@ import {
   type SimulatedTrade
 } from "./trade-simulator.js";
 
+export type UnresolvedSignal = {
+  signal: SignalCandidate;
+  signalTimestamp: number;
+};
+
 export type BacktestResult = {
   trades: SimulatedTrade[];
-  unresolvedSignals: SignalCandidate[];
+  unresolvedSignals: UnresolvedSignal[];
 };
 
 export function runBacktest(
@@ -18,7 +23,7 @@ export function runBacktest(
   strategy: Strategy
 ): BacktestResult {
   const trades: SimulatedTrade[] = [];
-  const unresolvedSignals: SignalCandidate[] = [];
+  const unresolvedSignals: UnresolvedSignal[] = [];
 
   for (let i = 0; i < candles.length; i += 1) {
     const availableCandles = candles.slice(0, i + 1);
@@ -37,7 +42,19 @@ export function runBacktest(
     );
 
     if (trade === null) {
-      unresolvedSignals.push(signal);
+      const signalTimestamp = candles[i]?.timestamp;
+
+      if (signalTimestamp === undefined) {
+        throw new Error(
+          "Signal candle is missing a timestamp."
+        );
+      }
+
+      unresolvedSignals.push({
+        signal,
+        signalTimestamp
+      });
+
       continue;
     }
 
