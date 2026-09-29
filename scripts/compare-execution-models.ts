@@ -10,6 +10,7 @@ import {
 } from "../src/backtest/metrics.js";
 import type {
   Candle,
+  Direction,
   SignalCandidate
 } from "../src/domain/types.js";
 import { EmaBreakoutStrategy } from "../src/strategy/ema-breakout.js";
@@ -27,6 +28,11 @@ type ExecutionAudit = {
   unresolvedSignals: GeneratedSignal[];
   skippedSignals: GeneratedSignal[];
   metrics: PerformanceMetrics;
+};
+
+type ActivePosition = {
+  direction: Direction;
+  exitTimestamp: number;
 };
 
 const provider = new BinanceHistoricalDataProvider();
@@ -93,6 +99,29 @@ function generateSignals(
   return signals;
 }
 
+function simulateGeneratedSignal(
+  historicalCandles: Candle[],
+  generated: GeneratedSignal
+): SimulatedTrade | null {
+  const futureCandles = historicalCandles.slice(
+    generated.candleIndex + 1
+  );
+
+  const trade = simulateTrade(
+    generated.signal,
+    futureCandles
+  );
+
+  if (trade === null) {
+    return null;
+  }
+
+  return {
+    ...trade,
+    entryTimestamp: generated.signalTimestamp
+  };
+}
+
 function runIndependentModel(
   historicalCandles: Candle[],
   signals: GeneratedSignal[]
@@ -101,13 +130,9 @@ function runIndependentModel(
   const unresolvedSignals: GeneratedSignal[] = [];
 
   for (const generated of signals) {
-    const futureCandles = historicalCandles.slice(
-      generated.candleIndex + 1
-    );
-
-    const trade = simulateTrade(
-      generated.signal,
-      futureCandles
+    const trade = simulateGeneratedSignal(
+      historicalCandles,
+      generated
     );
 
     if (trade === null) {
@@ -115,10 +140,7 @@ function runIndependentModel(
       continue;
     }
 
-    trades.push({
-      ...trade,
-      entryTimestamp: generated.signalTimestamp
-    });
+    trades.push(trade);
   }
 
   return {
@@ -148,33 +170,84 @@ function runSinglePositionModel(
       continue;
     }
 
-    const futureCandles = historicalCandles.slice(
-      generated.candleIndex + 1
-    );
-
-    const trade = simulateTrade(
-      generated.signal,
-      futureCandles
+    const trade = simulateGeneratedSignal(
+      historicalCandles,
+      generated
     );
 
     if (trade === null) {
       unresolvedSignals.push(generated);
 
-      // The signal remains active through the end of the
-      // historical dataset because it never resolved.
       activeExitTimestamp =
         historicalCandles.at(-1)?.timestamp ?? null;
 
       continue;
     }
 
-    const resolvedTrade: SimulatedTrade = {
-      ...trade,
-      entryTimestamp: generated.signalTimestamp
-    };
+    trades.push(trade);
+    activeExitTimestamp = trade.exitTimestamp;
+  }
 
-    trades.push(resolvedTrade);
-    activeExitTimestamp = resolvedTrade.exitTimestamp;
+  return {
+    trades,
+    unresolvedSignals,
+    skippedSignals,
+    metrics: calculateMetrics(trades)
+  };
+}
+
+function runPerDirectionModel(
+  historicalCandles: Candle[],
+  signals: GeneratedSignal[]
+): ExecutionAudit {
+  const trades: SimulatedTrade[] = [];
+  const unresolvedSignals: GeneratedSignal[] = [];
+  const skippedSignals: GeneratedSignal[] = [];
+
+  const activePositions = new Map<
+    Direction,
+    ActivePosition
+  >();
+
+  for (const generated of signals) {
+    const direction = generated.signal.direction;
+    const activePosition = activePositions.get(direction);
+
+    if (
+      activePosition !== undefined &&
+      generated.signalTimestamp < activePosition.exitTimestamp
+    ) {
+      skippedSignals.push(generated);
+      continue;
+    }
+
+    const trade = simulateGeneratedSignal(
+      historicalCandles,
+      generated
+    );
+
+    if (trade === null) {
+      unresolvedSignals.push(generated);
+
+      const finalTimestamp =
+        historicalCandles.at(-1)?.timestamp;
+
+      if (finalTimestamp !== undefined) {
+        activePositions.set(direction, {
+          direction,
+          exitTimestamp: finalTimestamp
+        });
+      }
+
+      continue;
+    }
+
+    trades.push(trade);
+
+    activePositions.set(direction, {
+      direction,
+      exitTimestamp: trade.exitTimestamp
+    });
   }
 
   return {
@@ -228,6 +301,39 @@ function printModel(
   );
 }
 
+function printDifference(
+  baseline: ExecutionAudit,
+  comparison: ExecutionAudit,
+  name: string
+): void {
+  console.log(`=== ${name} vs Independent ===`);
+  console.log(
+    `Trade reduction: ${
+      baseline.trades.length - comparison.trades.length
+    }`
+  );
+  console.log(
+    `Signals skipped: ${comparison.skippedSignals.length}`
+  );
+  console.log(
+    `Total R difference: ${
+      comparison.metrics.totalR - baseline.metrics.totalR
+    }`
+  );
+  console.log(
+    `Average R difference: ${
+      comparison.metrics.averageR -
+      baseline.metrics.averageR
+    }`
+  );
+  console.log(
+    `Maximum drawdown difference: ${
+      comparison.metrics.maximumDrawdown -
+      baseline.metrics.maximumDrawdown
+    }R`
+  );
+}
+
 const signals = generateSignals(candles);
 
 const independent = runIndependentModel(
@@ -236,6 +342,11 @@ const independent = runIndependentModel(
 );
 
 const singlePosition = runSinglePositionModel(
+  candles,
+  signals
+);
+
+const perDirection = runPerDirectionModel(
   candles,
   signals
 );
@@ -273,28 +384,32 @@ printModel(
 
 console.log("");
 
-console.log("=== Execution Difference ===");
-console.log(
-  `Trade reduction: ${independent.trades.length - singlePosition.trades.length}`
-);
-console.log(
-  `Signals skipped by single-position model: ${singlePosition.skippedSignals.length}`
-);
-console.log(
-  `Total R difference: ${singlePosition.metrics.totalR - independent.metrics.totalR}`
-);
-console.log(
-  `Average R difference: ${singlePosition.metrics.averageR - independent.metrics.averageR}`
-);
-console.log(
-  `Maximum drawdown difference: ${singlePosition.metrics.maximumDrawdown - independent.metrics.maximumDrawdown}R`
+printModel(
+  "One-Position-Per-Direction Execution",
+  perDirection
 );
 
 console.log("");
 
-console.log("=== Single-Position Skips ===");
+printDifference(
+  independent,
+  singlePosition,
+  "Single-Position Model"
+);
 
-for (const skipped of singlePosition.skippedSignals) {
+console.log("");
+
+printDifference(
+  independent,
+  perDirection,
+  "Per-Direction Model"
+);
+
+console.log("");
+
+console.log("=== Per-Direction Skips ===");
+
+for (const skipped of perDirection.skippedSignals) {
   console.log(
     `${formatTimestamp(skipped.signalTimestamp)} | ` +
       `${skipped.signal.direction} | ` +
