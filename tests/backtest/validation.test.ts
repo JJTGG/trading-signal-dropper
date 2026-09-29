@@ -1,35 +1,55 @@
 import { describe, expect, it } from "vitest";
 import type { Candle } from "../../src/domain/types.js";
 import { validateStrategy } from "../../src/backtest/validation.js";
-import type { Strategy } from "../../src/strategy/strategy.js";
+import { EmaBreakoutStrategy } from "../../src/strategy/ema-breakout.js";
 
-const candles: Candle[] = Array.from(
-  { length: 10 },
-  (_, index) => ({
-    timestamp: index,
-    open: 100 + index,
-    high: 101 + index,
-    low: 99 + index,
-    close: 100 + index,
-    volume: 1000
-  })
-);
+function createHistoricalCandles(): Candle[] {
+  const candles: Candle[] = [];
 
-const strategy: Strategy = {
-  name: "Test Strategy",
+  for (let i = 0; i < 50; i += 1) {
+    const close = 100 + i;
 
-  evaluate() {
-    return null;
+    candles.push({
+      timestamp: i,
+      open: close - 0.5,
+      high: close + 1,
+      low: close - 1,
+      close,
+      volume: 1000
+    });
   }
-};
+
+  candles.push({
+    timestamp: 50,
+    open: 149.5,
+    high: 154,
+    low: 149,
+    close: 153,
+    volume: 1000
+  });
+
+  return candles;
+}
 
 describe("validateStrategy", () => {
-  it("runs a strategy through the backtester and metrics pipeline", () => {
+  it("runs the EMA breakout strategy through the full validation pipeline", () => {
+    const candles = createHistoricalCandles();
+    const strategy = new EmaBreakoutStrategy();
+
     const result = validateStrategy(candles, strategy);
 
-    expect(result.candles).toBe(10);
-    expect(result.backtest.trades).toHaveLength(0);
-    expect(result.metrics.totalTrades).toBe(0);
-    expect(result.metrics.totalR).toBe(0);
+    expect(result.candles).toBe(51);
+    expect(result.backtest.trades.length).toBeGreaterThan(0);
+    expect(result.metrics.totalTrades).toBeGreaterThan(0);
+    expect(result.metrics.winningTrades).toBeGreaterThan(0);
+    expect(result.metrics.totalR).toBeGreaterThan(0);
+
+    const firstTrade = result.backtest.trades[0];
+
+    expect(firstTrade).toBeDefined();
+    expect(firstTrade?.signal.direction).toBe("LONG");
+    expect(firstTrade?.signal.strategy).toBe(
+      "EMA Trend + Breakout"
+    );
   });
 });
