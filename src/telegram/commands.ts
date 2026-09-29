@@ -1,3 +1,5 @@
+import { getSystemStatus } from "../application/status.js";
+
 export function handleCommand(
   command: string
 ): string {
@@ -10,12 +12,17 @@ export function handleCommand(
         "Use /status to check system status."
       ].join("\n");
 
-    case "/status":
+    case "/status": {
+      const status = getSystemStatus();
+
       return [
         "TSD status: ONLINE",
-        "Signal engine: READY",
-        "Telegram interface: CONNECTED"
+        `Application: ${status.application}`,
+        `Process: ${status.process}`,
+        `Signal engine: ${status.signalEngine}`,
+        `Uptime: ${status.uptimeSeconds}s`
       ].join("\n");
+    }
 
     default:
       return [
