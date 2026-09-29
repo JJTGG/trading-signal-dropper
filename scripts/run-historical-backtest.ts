@@ -1,8 +1,6 @@
 import { BinanceHistoricalDataProvider } from "../src/data/providers/binance.js";
 import { HistoricalDataLoader } from "../src/data/historical-loader.js";
-import { calculateMetrics } from "../src/backtest/metrics.js";
-import { runBacktest } from "../src/backtest/backtester.js";
-import { validateStrategy } from "../src/strategy/strategy-validator.js";
+import { validateStrategy } from "../src/backtest/validation.js";
 import { EmaBreakoutStrategy } from "../src/strategy/ema-breakout.js";
 
 const CANDLE_COUNT = 2000;
@@ -38,16 +36,14 @@ for (let i = 1; i < candles.length; i += 1) {
   }
 }
 
-const strategyValidation = validateStrategy(strategy);
+const validation = validateStrategy(candles, strategy);
+const { backtest, metrics } = validation;
 
-if (!strategyValidation.valid) {
-  throw new Error(
-    `Strategy validation failed: ${strategyValidation.errors.join("; ")}`
-  );
-}
-
-const result = runBacktest(candles, strategy);
-const metrics = calculateMetrics(result.trades);
+type ActiveTrade = {
+  entryTimestamp: number;
+  exitTimestamp: number;
+  direction: "LONG" | "SHORT";
+};
 
 type OverlapStats = {
   maxConcurrentPositions: number;
@@ -57,14 +53,8 @@ type OverlapStats = {
   oppositeDirectionOverlaps: number;
 };
 
-type ActiveTrade = {
-  entryTimestamp: number;
-  exitTimestamp: number;
-  direction: "LONG" | "SHORT";
-};
-
 function calculateOverlapStats(
-  trades: typeof result.trades
+  trades: typeof backtest.trades
 ): OverlapStats {
   const events = trades.flatMap((trade) => [
     {
@@ -147,38 +137,37 @@ function calculateOverlapStats(
     );
   }
 
-  let overlapEpisodes = 0;
   const sortedTrades = [...trades].sort(
     (a, b) => a.entryTimestamp - b.entryTimestamp
   );
 
-  let activeUntil = -Infinity;
+  let overlapEpisodes = 0;
+  let episodeEnd = -Infinity;
 
   for (const trade of sortedTrades) {
-    if (trade.entryTimestamp < activeUntil) {
+    if (trade.entryTimestamp < episodeEnd) {
       continue;
     }
 
-    const overlappingTradeExists = sortedTrades.some(
+    const overlappingTrades = sortedTrades.filter(
       (other) =>
         other !== trade &&
         other.entryTimestamp < trade.exitTimestamp &&
         trade.entryTimestamp < other.exitTimestamp
     );
 
-    if (overlappingTradeExists) {
-      overlapEpisodes += 1;
-      activeUntil = Math.max(
-        activeUntil,
-        ...sortedTrades
-          .filter(
-            (other) =>
-              other.entryTimestamp < trade.exitTimestamp &&
-              trade.entryTimestamp < other.exitTimestamp
-          )
-          .map((other) => other.exitTimestamp)
-      );
+    if (overlappingTrades.length === 0) {
+      continue;
     }
+
+    overlapEpisodes += 1;
+
+    episodeEnd = Math.max(
+      trade.exitTimestamp,
+      ...overlappingTrades.map(
+        (other) => other.exitTimestamp
+      )
+    );
   }
 
   return {
@@ -194,7 +183,9 @@ function formatTimestamp(timestamp: number): string {
   return new Date(timestamp).toISOString();
 }
 
-const overlapStats = calculateOverlapStats(result.trades);
+const overlapStats = calculateOverlapStats(
+  backtest.trades
+);
 
 console.log("=== Historical Backtest ===");
 console.log(`Candles: ${candles.length}`);
@@ -204,9 +195,9 @@ console.log(
 
 console.log("");
 console.log("=== Results ===");
-console.log(`Trades: ${result.trades.length}`);
+console.log(`Trades: ${backtest.trades.length}`);
 console.log(
-  `Unresolved signals: ${result.unresolvedSignals.length}`
+  `Unresolved signals: ${backtest.unresolvedSignals.length}`
 );
 
 console.log("");
@@ -252,7 +243,7 @@ console.log(
 console.log("");
 console.log("=== Unresolved Signals ===");
 
-for (const unresolved of result.unresolvedSignals) {
+for (const unresolved of backtest.unresolvedSignals) {
   console.log(
     `${formatTimestamp(unresolved.signalTimestamp)} | ` +
       `${unresolved.signal.direction} | ` +
