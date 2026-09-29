@@ -97,6 +97,53 @@ if (result.backtest.unresolvedSignals.length > 0) {
       signalTimestamp
     } = unresolved;
 
+    const signalIndex = candles.findIndex(
+      (candle) =>
+        candle.timestamp === signalTimestamp
+    );
+
+    const futureCandles =
+      signalIndex === -1
+        ? []
+        : candles.slice(signalIndex + 1);
+
+    const finalFutureCandle =
+      futureCandles.at(-1);
+
+    const highestHigh =
+      futureCandles.length > 0
+        ? Math.max(
+            ...futureCandles.map(
+              (candle) => candle.high
+            )
+          )
+        : null;
+
+    const lowestLow =
+      futureCandles.length > 0
+        ? Math.min(
+            ...futureCandles.map(
+              (candle) => candle.low
+            )
+          )
+        : null;
+
+    const tp2Progress =
+      highestHigh === null
+        ? null
+        : (
+            (highestHigh - signal.entry) /
+            (signal.takeProfits[1] - signal.entry)
+          ) * 100;
+
+    const stopDistance =
+      lowestLow === null
+        ? null
+        : (
+            (signal.entry - lowestLow) /
+            (signal.entry - signal.stopLoss)
+          ) * 100;
+
     console.log("");
     console.log(
       `Timestamp: ${new Date(
@@ -109,6 +156,44 @@ if (result.backtest.unresolvedSignals.length > 0) {
     console.log(
       `Take profits: ${signal.takeProfits.join(", ")}`
     );
+    console.log(
+      `Future candles: ${futureCandles.length}`
+    );
+
+    if (finalFutureCandle !== undefined) {
+      console.log(
+        `Final future candle: ${new Date(
+          finalFutureCandle.timestamp
+        ).toISOString()}`
+      );
+      console.log(
+        `Final OHLC: ${finalFutureCandle.open} / ${finalFutureCandle.high} / ${finalFutureCandle.low} / ${finalFutureCandle.close}`
+      );
+    }
+
+    console.log(
+      `Highest high after signal: ${highestHigh ?? "N/A"}`
+    );
+    console.log(
+      `Lowest low after signal: ${lowestLow ?? "N/A"}`
+    );
+
+    console.log(
+      `TP2 progress: ${
+        tp2Progress === null
+          ? "N/A"
+          : `${tp2Progress.toFixed(2)}%`
+      }`
+    );
+
+    console.log(
+      `Stop distance reached: ${
+        stopDistance === null
+          ? "N/A"
+          : `${stopDistance.toFixed(2)}%`
+      }`
+    );
+
     console.log(`Strategy: ${signal.strategy}`);
     console.log(`Timeframe: ${signal.timeframe}`);
     console.log(`Reason: ${signal.reason}`);
