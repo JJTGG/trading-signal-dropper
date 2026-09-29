@@ -24,31 +24,41 @@ export class HistoricalDataLoader {
     }
 
     const candles: Candle[] = [];
+    let endTime: number | undefined;
 
-    let remaining = candleCount;
+    while (candles.length < candleCount) {
+      const remaining = candleCount - candles.length;
 
-    while (remaining > 0) {
-      const limit = Math.min(
-        remaining,
-        MAX_CANDLES_PER_REQUEST
-      );
-
-      const batch = await this.provider.getCandles(
+      const batch = await this.provider.getCandles({
         symbol,
         timeframe,
-        limit
-      );
+        limit: Math.min(
+          remaining,
+          MAX_CANDLES_PER_REQUEST
+        ),
+        endTime
+      });
 
       if (batch.length === 0) {
         break;
       }
 
       candles.push(...batch);
-      remaining -= batch.length;
 
-      if (batch.length < limit) {
-        break;
+      const earliestTimestamp = Math.min(
+        ...batch.map((candle) => candle.timestamp)
+      );
+
+      if (
+        endTime !== undefined &&
+        earliestTimestamp >= endTime
+      ) {
+        throw new Error(
+          "Historical data provider did not move backwards."
+        );
       }
+
+      endTime = earliestTimestamp - 1;
     }
 
     const uniqueCandles = new Map<number, Candle>();
