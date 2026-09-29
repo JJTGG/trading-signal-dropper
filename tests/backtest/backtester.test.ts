@@ -54,11 +54,69 @@ const candles: Candle[] = [
 
 describe("runBacktest", () => {
   it("runs a strategy against future candles", () => {
-    const result = runBacktest(candles, strategy);
+    const result = runBacktest(
+      candles,
+      strategy
+    );
 
     expect(result.trades).toHaveLength(1);
-    expect(result.trades[0]?.outcome).toBe("WIN");
+    expect(result.unresolvedSignals).toHaveLength(0);
+
+    expect(result.trades[0]?.outcome).toBe(
+      "WIN"
+    );
     expect(result.trades[0]?.rMultiple).toBe(1.5);
-    expect(result.trades[0]?.entryTimestamp).toBe(2);
+    expect(result.trades[0]?.entryTimestamp).toBe(
+      2
+    );
+  });
+
+  it("tracks signals that remain unresolved", () => {
+    const unresolvedStrategy: Strategy = {
+      name: "Unresolved Test Strategy",
+
+      evaluate(candles: Candle[]) {
+        if (candles.length === 2) {
+          return signal;
+        }
+
+        return null;
+      }
+    };
+
+    const unresolvedCandles: Candle[] = [
+      {
+        timestamp: 1,
+        open: 100,
+        high: 101,
+        low: 99,
+        close: 100
+      },
+      {
+        timestamp: 2,
+        open: 100,
+        high: 101,
+        low: 99,
+        close: 100
+      },
+      {
+        timestamp: 3,
+        open: 100,
+        high: 101,
+        low: 99,
+        close: 100
+      }
+    ];
+
+    const result = runBacktest(
+      unresolvedCandles,
+      unresolvedStrategy
+    );
+
+    expect(result.trades).toHaveLength(0);
+    expect(result.unresolvedSignals).toHaveLength(1);
+    expect(result.unresolvedSignals[0]).toEqual(
+      signal
+    );
   });
 });
