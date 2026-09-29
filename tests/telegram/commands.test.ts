@@ -13,13 +13,9 @@ describe("Telegram command handler", () => {
     );
   });
 
-  it("responds to /status", () => {
-    expect(handleCommand("/status")).toBe(
-      [
-        "TSD status: ONLINE",
-        "Signal engine: READY",
-        "Telegram interface: CONNECTED"
-      ].join("\n")
+  it("reports application status", () => {
+    expect(handleCommand("/status")).toMatch(
+      /^TSD status: ONLINE\nApplication: Trading Signal Dropper\nProcess: ONLINE\nSignal engine: READY\nUptime: \d+s$/
     );
   });
 
