@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Candle } from "../../src/domain/types.js";
 import {
-  HistoricalDataLoader,
-  type HistoricalDataRequest
+  HistoricalDataLoader
 } from "../../src/data/historical-loader.js";
-import type { HistoricalDataProvider } from "../../src/data/historical.js";
+import type {
+  HistoricalDataProvider,
+  HistoricalDataRequest
+} from "../../src/data/historical.js";
 
 function createCandle(timestamp: number): Candle {
   return {
@@ -18,46 +20,53 @@ function createCandle(timestamp: number): Candle {
 }
 
 function createProvider(
-  batches: Candle[][]
+  implementation: (
+    request: HistoricalDataRequest
+  ) => Promise<Candle[]>
 ): HistoricalDataProvider {
   return {
-    getCandles: vi.fn()
-      .mockImplementation(async () => batches.shift() ?? [])
+    getCandles: vi.fn(implementation)
   };
 }
 
 describe("HistoricalDataLoader", () => {
   it("loads the requested number of candles across multiple batches", async () => {
-    const provider = createProvider([
-      Array.from({ length: 1000 }, (_, i) =>
-        createCandle(i)
-      ),
-      Array.from({ length: 1000 }, (_, i) =>
-        createCandle(i + 1000)
-      )
-    ]);
+    const provider = createProvider(
+      async ({ endTime }) => {
+        if (endTime === undefined) {
+          return Array.from({ length: 1000 }, (_, i) =>
+            createCandle(i + 1000)
+          );
+        }
+
+        return Array.from({ length: 1000 }, (_, i) =>
+          createCandle(i)
+        );
+      }
+    );
 
     const loader = new HistoricalDataLoader(provider);
 
-    const request: HistoricalDataRequest = {
+    const candles = await loader.load({
       symbol: "BTCUSDT",
       timeframe: "15m",
       candleCount: 2000
-    };
-
-    const candles = await loader.load(request);
+    });
 
     expect(candles).toHaveLength(2000);
     expect(candles[0]?.timestamp).toBe(0);
     expect(candles.at(-1)?.timestamp).toBe(1999);
+
+    expect(provider.getCandles).toHaveBeenCalledTimes(2);
   });
 
   it("requests no more than 1000 candles at a time", async () => {
-    const provider = createProvider([
-      Array.from({ length: 500 }, (_, i) =>
-        createCandle(i)
-      )
-    ]);
+    const provider = createProvider(
+      async () =>
+        Array.from({ length: 500 }, (_, i) =>
+          createCandle(i)
+        )
+    );
 
     const loader = new HistoricalDataLoader(provider);
 
@@ -67,26 +76,36 @@ describe("HistoricalDataLoader", () => {
       candleCount: 500
     });
 
-    expect(provider.getCandles).toHaveBeenCalledWith(
-      "BTCUSDT",
-      "15m",
-      500
-    );
+    expect(provider.getCandles).toHaveBeenCalledWith({
+      symbol: "BTCUSDT",
+      timeframe: "15m",
+      limit: 500,
+      endTime: undefined
+    });
   });
 
   it("deduplicates candles by timestamp", async () => {
-    const provider = createProvider([
-      [
-        createCandle(1),
-        createCandle(2),
-        createCandle(3)
-      ],
-      [
-        createCandle(3),
-        createCandle(4),
-        createCandle(5)
-      ]
-    ]);
+    let requestCount = 0;
+
+    const provider = createProvider(
+      async () => {
+        requestCount += 1;
+
+        if (requestCount === 1) {
+          return [
+            createCandle(3),
+            createCandle(4),
+            createCandle(5)
+          ];
+        }
+
+        return [
+          createCandle(1),
+          createCandle(2),
+          createCandle(3)
+        ];
+      }
+    );
 
     const loader = new HistoricalDataLoader(provider);
 
@@ -105,13 +124,44 @@ describe("HistoricalDataLoader", () => {
     ]);
   });
 
-  it("stops when the provider returns fewer candles than requested", async () => {
-    const provider = createProvider([
-      [
-        createCandle(1),
-        createCandle(2)
-      ]
-    ]);
+  it("continues when a batch is smaller than the requested limit", async () => {
+    let requestCount = 0;
+
+    const provider = createProvider(
+      async () => {
+        requestCount += 1;
+
+        if (requestCount === 1) {
+          return [
+            createCandle(4),
+            createCandle(5)
+          ];
+        }
+
+        return [
+          createCandle(1),
+          createCandle(2),
+          createCandle(3)
+        ];
+      }
+    );
+
+    const loader = new HistoricalDataLoader(provider);
+
+    const candles = await loader.load({
+      symbol: "BTCUSDT",
+      timeframe: "15m",
+      candleCount: 5
+    });
+
+    expect(candles).toHaveLength(5);
+    expect(provider.getCandles).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops when the provider returns no candles", async () => {
+    const provider = createProvider(
+      async () => []
+    );
 
     const loader = new HistoricalDataLoader(provider);
 
@@ -121,12 +171,15 @@ describe("HistoricalDataLoader", () => {
       candleCount: 100
     });
 
-    expect(candles).toHaveLength(2);
+    expect(candles).toHaveLength(0);
     expect(provider.getCandles).toHaveBeenCalledTimes(1);
   });
 
   it("rejects invalid candle counts", async () => {
-    const provider = createProvider([]);
+    const provider = createProvider(
+      async () => []
+    );
+
     const loader = new HistoricalDataLoader(provider);
 
     await expect(
