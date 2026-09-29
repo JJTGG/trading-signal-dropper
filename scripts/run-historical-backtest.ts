@@ -1,23 +1,19 @@
 import { BinanceHistoricalDataProvider } from "../src/data/providers/binance.js";
 import { HistoricalDataLoader } from "../src/data/historical-loader.js";
-import { validateStrategy } from "../src/backtest/validation.js";
+import { calculateMetrics } from "../src/backtest/metrics.js";
+import { runBacktest } from "../src/backtest/backtester.js";
+import { validateStrategy } from "../src/strategy/strategy-validator.js";
 import { EmaBreakoutStrategy } from "../src/strategy/ema-breakout.js";
 
-const SYMBOL = "BTCUSDT";
-const TIMEFRAME = "15m";
 const CANDLE_COUNT = 2000;
 
 const provider = new BinanceHistoricalDataProvider();
 const loader = new HistoricalDataLoader(provider);
 const strategy = new EmaBreakoutStrategy();
 
-console.log(
-  `Loading ${CANDLE_COUNT} ${SYMBOL} ${TIMEFRAME} candles...`
-);
-
 const candles = await loader.load({
-  symbol: SYMBOL,
-  timeframe: TIMEFRAME,
+  symbol: "BTCUSDT",
+  timeframe: "15m",
   candleCount: CANDLE_COUNT
 });
 
@@ -42,138 +38,227 @@ for (let i = 1; i < candles.length; i += 1) {
   }
 }
 
-const firstCandle = candles[0];
-const lastCandle = candles.at(-1);
+const strategyValidation = validateStrategy(strategy);
 
-if (
-  firstCandle === undefined ||
-  lastCandle === undefined
-) {
-  throw new Error("Historical dataset is empty.");
+if (!strategyValidation.valid) {
+  throw new Error(
+    `Strategy validation failed: ${strategyValidation.errors.join("; ")}`
+  );
 }
 
-const result = validateStrategy(
-  candles,
-  strategy
-);
+const result = runBacktest(candles, strategy);
+const metrics = calculateMetrics(result.trades);
 
-const resolvedTrades = result.backtest.trades;
+type OverlapStats = {
+  maxConcurrentPositions: number;
+  overlappingEntries: number;
+  overlapEpisodes: number;
+  sameDirectionOverlaps: number;
+  oppositeDirectionOverlaps: number;
+};
 
-const overlappingTrades = [];
+type ActiveTrade = {
+  entryTimestamp: number;
+  exitTimestamp: number;
+  direction: "LONG" | "SHORT";
+};
 
-for (let i = 0; i < resolvedTrades.length; i += 1) {
-  const currentTrade = resolvedTrades[i];
+function calculateOverlapStats(
+  trades: typeof result.trades
+): OverlapStats {
+  const events = trades.flatMap((trade) => [
+    {
+      timestamp: trade.entryTimestamp,
+      type: "ENTRY" as const,
+      trade
+    },
+    {
+      timestamp: trade.exitTimestamp,
+      type: "EXIT" as const,
+      trade
+    }
+  ]);
 
-  if (currentTrade === undefined) {
-    continue;
-  }
+  events.sort((a, b) => {
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp - b.timestamp;
+    }
 
-  for (
-    let j = i + 1;
-    j < resolvedTrades.length;
-    j += 1
-  ) {
-    const otherTrade = resolvedTrades[j];
+    // An exit at the same timestamp as another entry
+    // does not create simultaneous exposure.
+    if (a.type === "EXIT" && b.type === "ENTRY") {
+      return -1;
+    }
 
-    if (otherTrade === undefined) {
+    if (a.type === "ENTRY" && b.type === "EXIT") {
+      return 1;
+    }
+
+    return 0;
+  });
+
+  const activeTrades: ActiveTrade[] = [];
+
+  let maxConcurrentPositions = 0;
+  let overlappingEntries = 0;
+  let sameDirectionOverlaps = 0;
+  let oppositeDirectionOverlaps = 0;
+
+  for (const event of events) {
+    if (event.type === "EXIT") {
+      const index = activeTrades.findIndex(
+        (trade) =>
+          trade.entryTimestamp === event.trade.entryTimestamp &&
+          trade.exitTimestamp === event.trade.exitTimestamp &&
+          trade.direction === event.trade.signal.direction
+      );
+
+      if (index !== -1) {
+        activeTrades.splice(index, 1);
+      }
+
       continue;
     }
 
-    const currentStartsBeforeOtherEnds =
-      currentTrade.entryTimestamp <
-      otherTrade.exitTimestamp;
+    if (activeTrades.length > 0) {
+      overlappingEntries += 1;
 
-    const otherStartsBeforeCurrentEnds =
-      otherTrade.entryTimestamp <
-      currentTrade.exitTimestamp;
+      for (const activeTrade of activeTrades) {
+        if (
+          activeTrade.direction ===
+          event.trade.signal.direction
+        ) {
+          sameDirectionOverlaps += 1;
+        } else {
+          oppositeDirectionOverlaps += 1;
+        }
+      }
+    }
 
-    if (
-      currentStartsBeforeOtherEnds &&
-      otherStartsBeforeCurrentEnds
-    ) {
-      overlappingTrades.push({
-        first: currentTrade,
-        second: otherTrade
-      });
+    activeTrades.push({
+      entryTimestamp: event.trade.entryTimestamp,
+      exitTimestamp: event.trade.exitTimestamp,
+      direction: event.trade.signal.direction
+    });
+
+    maxConcurrentPositions = Math.max(
+      maxConcurrentPositions,
+      activeTrades.length
+    );
+  }
+
+  let overlapEpisodes = 0;
+  const sortedTrades = [...trades].sort(
+    (a, b) => a.entryTimestamp - b.entryTimestamp
+  );
+
+  let activeUntil = -Infinity;
+
+  for (const trade of sortedTrades) {
+    if (trade.entryTimestamp < activeUntil) {
+      continue;
+    }
+
+    const overlappingTradeExists = sortedTrades.some(
+      (other) =>
+        other !== trade &&
+        other.entryTimestamp < trade.exitTimestamp &&
+        trade.entryTimestamp < other.exitTimestamp
+    );
+
+    if (overlappingTradeExists) {
+      overlapEpisodes += 1;
+      activeUntil = Math.max(
+        activeUntil,
+        ...sortedTrades
+          .filter(
+            (other) =>
+              other.entryTimestamp < trade.exitTimestamp &&
+              trade.entryTimestamp < other.exitTimestamp
+          )
+          .map((other) => other.exitTimestamp)
+      );
     }
   }
+
+  return {
+    maxConcurrentPositions,
+    overlappingEntries,
+    overlapEpisodes,
+    sameDirectionOverlaps,
+    oppositeDirectionOverlaps
+  };
 }
 
-console.log("");
-console.log("Historical dataset");
-console.log("------------------");
-console.log(`Symbol: ${SYMBOL}`);
-console.log(`Timeframe: ${TIMEFRAME}`);
+function formatTimestamp(timestamp: number): string {
+  return new Date(timestamp).toISOString();
+}
+
+const overlapStats = calculateOverlapStats(result.trades);
+
+console.log("=== Historical Backtest ===");
 console.log(`Candles: ${candles.length}`);
 console.log(
-  `First timestamp: ${new Date(
-    firstCandle.timestamp
-  ).toISOString()}`
-);
-console.log(
-  `Last timestamp: ${new Date(
-    lastCandle.timestamp
-  ).toISOString()}`
+  `Range: ${formatTimestamp(candles[0]?.timestamp ?? 0)} → ${formatTimestamp(candles.at(-1)?.timestamp ?? 0)}`
 );
 
 console.log("");
-console.log("Backtest");
-console.log("--------");
+console.log("=== Results ===");
+console.log(`Trades: ${result.trades.length}`);
 console.log(
-  `Trades: ${resolvedTrades.length}`
-);
-console.log(
-  `Unresolved signals: ${result.backtest.unresolvedSignals.length}`
+  `Unresolved signals: ${result.unresolvedSignals.length}`
 );
 
 console.log("");
-console.log("Overlap audit");
-console.log("-------------");
+console.log("=== Performance ===");
+console.log(`Total R: ${metrics.totalR}`);
+console.log(`Average R: ${metrics.averageR}`);
+console.log(`Win rate: ${metrics.winRate}`);
+console.log(`Profit factor: ${metrics.profitFactor}`);
 console.log(
-  `Overlapping resolved trade pairs: ${overlappingTrades.length}`
+  `Maximum drawdown: ${metrics.maximumDrawdown}R`
+);
+console.log(
+  `Largest winning trade: ${metrics.largestWinningTrade}R`
+);
+console.log(
+  `Largest losing trade: ${metrics.largestLosingTrade}R`
+);
+console.log(
+  `Longest winning streak: ${metrics.longestWinningStreak}`
+);
+console.log(
+  `Longest losing streak: ${metrics.longestLosingStreak}`
 );
 
-if (overlappingTrades.length > 0) {
-  for (
-    const overlap of overlappingTrades
-  ) {
-    console.log("");
+console.log("");
+console.log("=== Concurrency Audit ===");
+console.log(
+  `Max concurrent resolved positions: ${overlapStats.maxConcurrentPositions}`
+);
+console.log(
+  `Entries made while another position was active: ${overlapStats.overlappingEntries}`
+);
+console.log(
+  `Overlap episodes: ${overlapStats.overlapEpisodes}`
+);
+console.log(
+  `Same-direction overlap pairs: ${overlapStats.sameDirectionOverlaps}`
+);
+console.log(
+  `Opposite-direction overlap pairs: ${overlapStats.oppositeDirectionOverlaps}`
+);
 
-    console.log(
-      `First trade: ${new Date(
-        overlap.first.entryTimestamp
-      ).toISOString()} → ${new Date(
-        overlap.first.exitTimestamp
-      ).toISOString()}`
-    );
+console.log("");
+console.log("=== Unresolved Signals ===");
 
-    console.log(
-      `  Direction: ${overlap.first.signal.direction}`
-    );
-
-    console.log(
-      `  R: ${overlap.first.rMultiple}`
-    );
-
-    console.log(
-      `Second trade: ${new Date(
-        overlap.second.entryTimestamp
-      ).toISOString()} → ${new Date(
-        overlap.second.exitTimestamp
-      ).toISOString()}`
-    );
-
-    console.log(
-      `  Direction: ${overlap.second.signal.direction}`
-    );
-
-    console.log(
-      `  R: ${overlap.second.rMultiple}`
-    );
-  }
+for (const unresolved of result.unresolvedSignals) {
+  console.log(
+    `${formatTimestamp(unresolved.signalTimestamp)} | ` +
+      `${unresolved.signal.direction} | ` +
+      `entry=${unresolved.signal.entry} | ` +
+      `SL=${unresolved.signal.stopLoss} | ` +
+      `TP1=${unresolved.signal.takeProfits[0]} | ` +
+      `TP2=${unresolved.signal.takeProfits[1]}`
+  );
 }
-
-console.log("");
-console.log("Metrics");
-console.log("-------");
-console.log(result.metrics);
