@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Candle, SignalCandidate } from "../../src/domain/types.js";
+import type {
+  Candle,
+  SignalCandidate
+} from "../../src/domain/types.js";
 import { runBacktest } from "../../src/backtest/backtester.js";
 import type { Strategy } from "../../src/strategy/strategy.js";
 
@@ -7,7 +10,7 @@ const signal: SignalCandidate = {
   direction: "LONG",
   entry: 100,
   stopLoss: 98,
-  takeProfits: [102],
+  takeProfits: [102, 104],
   strategy: "Test",
   timeframe: "15m",
   reason: "Test signal"
@@ -43,9 +46,9 @@ const candles: Candle[] = [
   {
     timestamp: 3,
     open: 100,
-    high: 103,
+    high: 105,
     low: 100,
-    close: 102
+    close: 104
   }
 ];
 
@@ -55,7 +58,7 @@ describe("runBacktest", () => {
 
     expect(result.trades).toHaveLength(1);
     expect(result.trades[0]?.outcome).toBe("WIN");
-    expect(result.trades[0]?.rMultiple).toBe(1);
+    expect(result.trades[0]?.rMultiple).toBe(1.5);
     expect(result.trades[0]?.entryTimestamp).toBe(2);
   });
 });
