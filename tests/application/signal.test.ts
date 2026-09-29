@@ -13,23 +13,32 @@ function createCandles(closes: number[]): Candle[] {
   }));
 }
 
+function createBullishBreakoutCandles(): Candle[] {
+  const closes = Array.from(
+    { length: 99 },
+    (_, index) => 100 + index
+  );
+
+  closes.push(210);
+
+  return createCandles(closes);
+}
+
+function createNonBreakoutCandles(): Candle[] {
+  const closes = Array.from(
+    { length: 100 },
+    (_, index) => 100 + index
+  );
+
+  return createCandles(closes);
+}
+
 describe("generateSignal", () => {
   it("generates a signal through the injected data provider", async () => {
     const provider: HistoricalDataProvider = {
-      getCandles: vi.fn().mockResolvedValue(
-        createCandles([
-          100,
-          101,
-          102,
-          103,
-          104,
-          105,
-          106,
-          107,
-          108,
-          111
-        ])
-      )
+      getCandles: vi
+        .fn()
+        .mockResolvedValue(createBullishBreakoutCandles())
     };
 
     const result = await generateSignal(provider, {
@@ -50,20 +59,9 @@ describe("generateSignal", () => {
 
   it("returns null when the strategy produces no signal", async () => {
     const provider: HistoricalDataProvider = {
-      getCandles: vi.fn().mockResolvedValue(
-        createCandles([
-          100,
-          101,
-          102,
-          103,
-          104,
-          105,
-          106,
-          107,
-          108,
-          108.5
-        ])
-      )
+      getCandles: vi
+        .fn()
+        .mockResolvedValue(createNonBreakoutCandles())
     };
 
     const result = await generateSignal(provider, {
