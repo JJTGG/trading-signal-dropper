@@ -36,18 +36,26 @@ for (let i = 1; i < candles.length; i += 1) {
     current === undefined ||
     current.timestamp <= previous.timestamp
   ) {
-    throw new Error("Historical candles are not strictly chronological.");
+    throw new Error(
+      "Historical candles are not strictly chronological."
+    );
   }
 }
 
 const firstCandle = candles[0];
 const lastCandle = candles.at(-1);
 
-if (firstCandle === undefined || lastCandle === undefined) {
+if (
+  firstCandle === undefined ||
+  lastCandle === undefined
+) {
   throw new Error("Historical dataset is empty.");
 }
 
-const result = validateStrategy(candles, strategy);
+const result = validateStrategy(
+  candles,
+  strategy
+);
 
 console.log("");
 console.log("Historical dataset");
@@ -56,16 +64,25 @@ console.log(`Symbol: ${SYMBOL}`);
 console.log(`Timeframe: ${TIMEFRAME}`);
 console.log(`Candles: ${candles.length}`);
 console.log(
-  `First timestamp: ${new Date(firstCandle.timestamp).toISOString()}`
+  `First timestamp: ${new Date(
+    firstCandle.timestamp
+  ).toISOString()}`
 );
 console.log(
-  `Last timestamp: ${new Date(lastCandle.timestamp).toISOString()}`
+  `Last timestamp: ${new Date(
+    lastCandle.timestamp
+  ).toISOString()}`
 );
 
 console.log("");
 console.log("Backtest");
 console.log("--------");
-console.log(`Trades: ${result.backtest.trades.length}`);
+console.log(
+  `Trades: ${result.backtest.trades.length}`
+);
+console.log(
+  `Unresolved signals: ${result.backtest.unresolvedSignals.length}`
+);
 
 console.log("");
 console.log("Metrics");
