@@ -30,9 +30,8 @@ type ExecutionAudit = {
   metrics: PerformanceMetrics;
 };
 
-type ActivePosition = {
-  direction: Direction;
-  exitTimestamp: number;
+type ClassifiedTrade = SimulatedTrade & {
+  entryType: "INITIAL" | "STACKED";
 };
 
 const provider = new BinanceHistoricalDataProvider();
@@ -204,18 +203,19 @@ function runPerDirectionModel(
   const unresolvedSignals: GeneratedSignal[] = [];
   const skippedSignals: GeneratedSignal[] = [];
 
-  const activePositions = new Map<
+  const activeExitTimestamps = new Map<
     Direction,
-    ActivePosition
+    number
   >();
 
   for (const generated of signals) {
     const direction = generated.signal.direction;
-    const activePosition = activePositions.get(direction);
+    const activeExitTimestamp =
+      activeExitTimestamps.get(direction);
 
     if (
-      activePosition !== undefined &&
-      generated.signalTimestamp < activePosition.exitTimestamp
+      activeExitTimestamp !== undefined &&
+      generated.signalTimestamp < activeExitTimestamp
     ) {
       skippedSignals.push(generated);
       continue;
@@ -233,10 +233,10 @@ function runPerDirectionModel(
         historicalCandles.at(-1)?.timestamp;
 
       if (finalTimestamp !== undefined) {
-        activePositions.set(direction, {
+        activeExitTimestamps.set(
           direction,
-          exitTimestamp: finalTimestamp
-        });
+          finalTimestamp
+        );
       }
 
       continue;
@@ -244,10 +244,10 @@ function runPerDirectionModel(
 
     trades.push(trade);
 
-    activePositions.set(direction, {
+    activeExitTimestamps.set(
       direction,
-      exitTimestamp: trade.exitTimestamp
-    });
+      trade.exitTimestamp
+    );
   }
 
   return {
@@ -258,46 +258,76 @@ function runPerDirectionModel(
   };
 }
 
-function formatTimestamp(timestamp: number): string {
-  return new Date(timestamp).toISOString();
+function classifySameDirectionTrades(
+  trades: SimulatedTrade[]
+): ClassifiedTrade[] {
+  const sortedTrades = [...trades].sort(
+    (a, b) => a.entryTimestamp - b.entryTimestamp
+  );
+
+  const activeByDirection = new Map<
+    Direction,
+    SimulatedTrade[]
+  >();
+
+  return sortedTrades.map((trade) => {
+    const activeTrades =
+      activeByDirection.get(trade.signal.direction) ?? [];
+
+    const hasActiveSameDirectionTrade =
+      activeTrades.some(
+        (activeTrade) =>
+          activeTrade.entryTimestamp < trade.entryTimestamp &&
+          trade.entryTimestamp < activeTrade.exitTimestamp
+      );
+
+    const classifiedTrade: ClassifiedTrade = {
+      ...trade,
+      entryType: hasActiveSameDirectionTrade
+        ? "STACKED"
+        : "INITIAL"
+    };
+
+    activeTrades.push(trade);
+
+    activeByDirection.set(
+      trade.signal.direction,
+      activeTrades.filter(
+        (activeTrade) =>
+          activeTrade.exitTimestamp > trade.entryTimestamp
+      )
+    );
+
+    return classifiedTrade;
+  });
 }
 
-function printModel(
+function printMetrics(
   name: string,
-  audit: ExecutionAudit
+  trades: SimulatedTrade[]
 ): void {
+  const metrics = calculateMetrics(trades);
+
   console.log(`=== ${name} ===`);
-  console.log(`Executed trades: ${audit.trades.length}`);
+  console.log(`Trades: ${trades.length}`);
+  console.log(`Total R: ${metrics.totalR}`);
+  console.log(`Average R: ${metrics.averageR}`);
+  console.log(`Win rate: ${metrics.winRate}`);
+  console.log(`Profit factor: ${metrics.profitFactor}`);
   console.log(
-    `Unresolved signals: ${audit.unresolvedSignals.length}`
+    `Maximum drawdown: ${metrics.maximumDrawdown}R`
   );
   console.log(
-    `Skipped signals: ${audit.skippedSignals.length}`
-  );
-  console.log(`Total R: ${audit.metrics.totalR}`);
-  console.log(
-    `Average R: ${audit.metrics.averageR}`
+    `Largest winning trade: ${metrics.largestWinningTrade}R`
   );
   console.log(
-    `Win rate: ${audit.metrics.winRate}`
+    `Largest losing trade: ${metrics.largestLosingTrade}R`
   );
   console.log(
-    `Profit factor: ${audit.metrics.profitFactor}`
+    `Longest winning streak: ${metrics.longestWinningStreak}`
   );
   console.log(
-    `Maximum drawdown: ${audit.metrics.maximumDrawdown}R`
-  );
-  console.log(
-    `Largest winning trade: ${audit.metrics.largestWinningTrade}R`
-  );
-  console.log(
-    `Largest losing trade: ${audit.metrics.largestLosingTrade}R`
-  );
-  console.log(
-    `Longest winning streak: ${audit.metrics.longestWinningStreak}`
-  );
-  console.log(
-    `Longest losing streak: ${audit.metrics.longestLosingStreak}`
+    `Longest losing streak: ${metrics.longestLosingStreak}`
   );
 }
 
@@ -351,6 +381,17 @@ const perDirection = runPerDirectionModel(
   signals
 );
 
+const classifiedTrades =
+  classifySameDirectionTrades(independent.trades);
+
+const initialTrades = classifiedTrades.filter(
+  (trade) => trade.entryType === "INITIAL"
+);
+
+const stackedTrades = classifiedTrades.filter(
+  (trade) => trade.entryType === "STACKED"
+);
+
 const longSignals = signals.filter(
   ({ signal }) => signal.direction === "LONG"
 ).length;
@@ -359,10 +400,24 @@ const shortSignals = signals.filter(
   ({ signal }) => signal.direction === "SHORT"
 ).length;
 
+const stackedR = stackedTrades.reduce(
+  (total, trade) => total + trade.rMultiple,
+  0
+);
+
+const initialR = initialTrades.reduce(
+  (total, trade) => total + trade.rMultiple,
+  0
+);
+
 console.log("=== Execution Model Audit ===");
 console.log(`Candles: ${candles.length}`);
 console.log(
-  `Range: ${formatTimestamp(candles[0]?.timestamp ?? 0)} → ${formatTimestamp(candles.at(-1)?.timestamp ?? 0)}`
+  `Range: ${new Date(
+    candles[0]?.timestamp ?? 0
+  ).toISOString()} → ${new Date(
+    candles.at(-1)?.timestamp ?? 0
+  ).toISOString()}`
 );
 console.log(`Generated signals: ${signals.length}`);
 console.log(`LONG signals: ${longSignals}`);
@@ -370,23 +425,41 @@ console.log(`SHORT signals: ${shortSignals}`);
 
 console.log("");
 
-printModel(
+printMetrics(
   "Independent Execution",
-  independent
+  independent.trades
+);
+
+console.log(
+  `Unresolved signals: ${independent.unresolvedSignals.length}`
 );
 
 console.log("");
 
-printModel(
+printMetrics(
   "Single-Position Execution",
-  singlePosition
+  singlePosition.trades
+);
+
+console.log(
+  `Unresolved signals: ${singlePosition.unresolvedSignals.length}`
+);
+console.log(
+  `Skipped signals: ${singlePosition.skippedSignals.length}`
 );
 
 console.log("");
 
-printModel(
+printMetrics(
   "One-Position-Per-Direction Execution",
-  perDirection
+  perDirection.trades
+);
+
+console.log(
+  `Unresolved signals: ${perDirection.unresolvedSignals.length}`
+);
+console.log(
+  `Skipped signals: ${perDirection.skippedSignals.length}`
 );
 
 console.log("");
@@ -407,12 +480,23 @@ printDifference(
 
 console.log("");
 
-console.log("=== Per-Direction Skips ===");
+console.log("=== Same-Direction Entry Audit ===");
+console.log(`Resolved trades: ${classifiedTrades.length}`);
+console.log(`Initial entries: ${initialTrades.length}`);
+console.log(`Stacked entries: ${stackedTrades.length}`);
+console.log(`Initial-entry R: ${initialR}`);
+console.log(`Stacked-entry R: ${stackedR}`);
 
-for (const skipped of perDirection.skippedSignals) {
-  console.log(
-    `${formatTimestamp(skipped.signalTimestamp)} | ` +
-      `${skipped.signal.direction} | ` +
-      `entry=${skipped.signal.entry}`
-  );
-}
+console.log("");
+
+printMetrics(
+  "Initial Same-Direction Entries",
+  initialTrades
+);
+
+console.log("");
+
+printMetrics(
+  "Stacked Same-Direction Entries",
+  stackedTrades
+);
