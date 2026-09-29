@@ -4,18 +4,20 @@ import {
   simulateTrade,
   type SimulatedTrade
 } from "../src/backtest/trade-simulator.js";
-import {
-  calculateMetrics,
-  type PerformanceMetrics
-} from "../src/backtest/metrics.js";
 import type {
   Candle,
   Direction,
   SignalCandidate
 } from "../src/domain/types.js";
+import { atr } from "../src/indicators/atr.js";
+import { ema } from "../src/indicators/ema.js";
 import { EmaBreakoutStrategy } from "../src/strategy/ema-breakout.js";
 
 const CANDLE_COUNT = 2000;
+const FAST_EMA_PERIOD = 20;
+const SLOW_EMA_PERIOD = 50;
+const BREAKOUT_LOOKBACK = 20;
+const ATR_PERIOD = 14;
 
 type GeneratedSignal = {
   signal: SignalCandidate;
@@ -23,15 +25,18 @@ type GeneratedSignal = {
   candleIndex: number;
 };
 
-type ExecutionAudit = {
-  trades: SimulatedTrade[];
-  unresolvedSignals: GeneratedSignal[];
-  skippedSignals: GeneratedSignal[];
-  metrics: PerformanceMetrics;
-};
-
 type ClassifiedTrade = SimulatedTrade & {
   entryType: "INITIAL" | "STACKED";
+};
+
+type TradeObservation = ClassifiedTrade & {
+  direction: Direction;
+  atr: number;
+  emaSeparation: number;
+  emaSeparationAtr: number;
+  breakoutDistance: number;
+  breakoutDistanceAtr: number;
+  durationCandles: number;
 };
 
 const provider = new BinanceHistoricalDataProvider();
@@ -121,143 +126,6 @@ function simulateGeneratedSignal(
   };
 }
 
-function runIndependentModel(
-  historicalCandles: Candle[],
-  signals: GeneratedSignal[]
-): ExecutionAudit {
-  const trades: SimulatedTrade[] = [];
-  const unresolvedSignals: GeneratedSignal[] = [];
-
-  for (const generated of signals) {
-    const trade = simulateGeneratedSignal(
-      historicalCandles,
-      generated
-    );
-
-    if (trade === null) {
-      unresolvedSignals.push(generated);
-      continue;
-    }
-
-    trades.push(trade);
-  }
-
-  return {
-    trades,
-    unresolvedSignals,
-    skippedSignals: [],
-    metrics: calculateMetrics(trades)
-  };
-}
-
-function runSinglePositionModel(
-  historicalCandles: Candle[],
-  signals: GeneratedSignal[]
-): ExecutionAudit {
-  const trades: SimulatedTrade[] = [];
-  const unresolvedSignals: GeneratedSignal[] = [];
-  const skippedSignals: GeneratedSignal[] = [];
-
-  let activeExitTimestamp: number | null = null;
-
-  for (const generated of signals) {
-    if (
-      activeExitTimestamp !== null &&
-      generated.signalTimestamp < activeExitTimestamp
-    ) {
-      skippedSignals.push(generated);
-      continue;
-    }
-
-    const trade = simulateGeneratedSignal(
-      historicalCandles,
-      generated
-    );
-
-    if (trade === null) {
-      unresolvedSignals.push(generated);
-
-      activeExitTimestamp =
-        historicalCandles.at(-1)?.timestamp ?? null;
-
-      continue;
-    }
-
-    trades.push(trade);
-    activeExitTimestamp = trade.exitTimestamp;
-  }
-
-  return {
-    trades,
-    unresolvedSignals,
-    skippedSignals,
-    metrics: calculateMetrics(trades)
-  };
-}
-
-function runPerDirectionModel(
-  historicalCandles: Candle[],
-  signals: GeneratedSignal[]
-): ExecutionAudit {
-  const trades: SimulatedTrade[] = [];
-  const unresolvedSignals: GeneratedSignal[] = [];
-  const skippedSignals: GeneratedSignal[] = [];
-
-  const activeExitTimestamps = new Map<
-    Direction,
-    number
-  >();
-
-  for (const generated of signals) {
-    const direction = generated.signal.direction;
-    const activeExitTimestamp =
-      activeExitTimestamps.get(direction);
-
-    if (
-      activeExitTimestamp !== undefined &&
-      generated.signalTimestamp < activeExitTimestamp
-    ) {
-      skippedSignals.push(generated);
-      continue;
-    }
-
-    const trade = simulateGeneratedSignal(
-      historicalCandles,
-      generated
-    );
-
-    if (trade === null) {
-      unresolvedSignals.push(generated);
-
-      const finalTimestamp =
-        historicalCandles.at(-1)?.timestamp;
-
-      if (finalTimestamp !== undefined) {
-        activeExitTimestamps.set(
-          direction,
-          finalTimestamp
-        );
-      }
-
-      continue;
-    }
-
-    trades.push(trade);
-
-    activeExitTimestamps.set(
-      direction,
-      trade.exitTimestamp
-    );
-  }
-
-  return {
-    trades,
-    unresolvedSignals,
-    skippedSignals,
-    metrics: calculateMetrics(trades)
-  };
-}
-
 function classifySameDirectionTrades(
   trades: SimulatedTrade[]
 ): ClassifiedTrade[] {
@@ -302,115 +170,343 @@ function classifySameDirectionTrades(
   });
 }
 
-function printMetrics(
+function observeTrades(
+  historicalCandles: Candle[],
+  classifiedTrades: ClassifiedTrade[]
+): TradeObservation[] {
+  const closes = historicalCandles.map(
+    (candle) => candle.close
+  );
+
+  const fastEmaValues = ema(
+    closes,
+    FAST_EMA_PERIOD
+  );
+
+  const slowEmaValues = ema(
+    closes,
+    SLOW_EMA_PERIOD
+  );
+
+  const atrValues = atr(
+    historicalCandles,
+    ATR_PERIOD
+  );
+
+  return classifiedTrades.map((trade) => {
+    const candleIndex = historicalCandles.findIndex(
+      (candle) =>
+        candle.timestamp === trade.entryTimestamp
+    );
+
+    if (candleIndex < 0) {
+      throw new Error(
+        `Could not locate entry candle for ${trade.entryTimestamp}.`
+      );
+    }
+
+    const entryCandle =
+      historicalCandles[candleIndex];
+
+    if (entryCandle === undefined) {
+      throw new Error(
+        `Entry candle is missing at index ${candleIndex}.`
+      );
+    }
+
+    const currentAtr = atrValues[candleIndex];
+    const fastEma = fastEmaValues[candleIndex];
+    const slowEma = slowEmaValues[candleIndex];
+
+    if (
+      currentAtr === undefined ||
+      fastEma === undefined ||
+      slowEma === undefined
+    ) {
+      throw new Error(
+        `Missing indicator values for entry at ${trade.entryTimestamp}.`
+      );
+    }
+
+    const breakoutCandles = historicalCandles.slice(
+      Math.max(
+        0,
+        candleIndex - BREAKOUT_LOOKBACK
+      ),
+      candleIndex
+    );
+
+    if (breakoutCandles.length === 0) {
+      throw new Error(
+        `Missing breakout candles for entry at ${trade.entryTimestamp}.`
+      );
+    }
+
+    const recentHigh = Math.max(
+      ...breakoutCandles.map(
+        (candle) => candle.high
+      )
+    );
+
+    const recentLow = Math.min(
+      ...breakoutCandles.map(
+        (candle) => candle.low
+      )
+    );
+
+    const emaSeparation = Math.abs(
+      fastEma - slowEma
+    );
+
+    const breakoutDistance =
+      trade.direction === "LONG"
+        ? trade.signal.entry - recentHigh
+        : recentLow - trade.signal.entry;
+
+    const durationMilliseconds =
+      trade.exitTimestamp - trade.entryTimestamp;
+
+    const durationCandles =
+      durationMilliseconds / (15 * 60 * 1000);
+
+    return {
+      ...trade,
+      direction: trade.signal.direction,
+      atr: currentAtr,
+      emaSeparation,
+      emaSeparationAtr:
+        emaSeparation / currentAtr,
+      breakoutDistance,
+      breakoutDistanceAtr:
+        breakoutDistance / currentAtr,
+      durationCandles
+    };
+  });
+}
+
+function printSummary(
   name: string,
-  trades: SimulatedTrade[]
+  trades: TradeObservation[]
 ): void {
-  const metrics = calculateMetrics(trades);
+  const totalR = trades.reduce(
+    (total, trade) => total + trade.rMultiple,
+    0
+  );
+
+  const wins = trades.filter(
+    (trade) => trade.rMultiple > 0
+  ).length;
+
+  const losses = trades.filter(
+    (trade) => trade.rMultiple < 0
+  ).length;
+
+  const averageR =
+    trades.length === 0
+      ? 0
+      : totalR / trades.length;
+
+  const winRate =
+    trades.length === 0
+      ? 0
+      : wins / trades.length;
+
+  const grossProfit = trades
+    .filter((trade) => trade.rMultiple > 0)
+    .reduce(
+      (total, trade) => total + trade.rMultiple,
+      0
+    );
+
+  const grossLoss = Math.abs(
+    trades
+      .filter((trade) => trade.rMultiple < 0)
+      .reduce(
+        (total, trade) => total + trade.rMultiple,
+        0
+      )
+  );
+
+  const profitFactor =
+    grossLoss === 0
+      ? grossProfit > 0
+        ? Infinity
+        : 0
+      : grossProfit / grossLoss;
+
+  const averageAtr =
+    trades.length === 0
+      ? 0
+      : trades.reduce(
+          (total, trade) => total + trade.atr,
+          0
+        ) / trades.length;
+
+  const averageEmaSeparationAtr =
+    trades.length === 0
+      ? 0
+      : trades.reduce(
+          (total, trade) =>
+            total + trade.emaSeparationAtr,
+          0
+        ) / trades.length;
+
+  const averageBreakoutDistanceAtr =
+    trades.length === 0
+      ? 0
+      : trades.reduce(
+          (total, trade) =>
+            total + trade.breakoutDistanceAtr,
+          0
+        ) / trades.length;
+
+  const averageDuration =
+    trades.length === 0
+      ? 0
+      : trades.reduce(
+          (total, trade) =>
+            total + trade.durationCandles,
+          0
+        ) / trades.length;
 
   console.log(`=== ${name} ===`);
   console.log(`Trades: ${trades.length}`);
-  console.log(`Total R: ${metrics.totalR}`);
-  console.log(`Average R: ${metrics.averageR}`);
-  console.log(`Win rate: ${metrics.winRate}`);
-  console.log(`Profit factor: ${metrics.profitFactor}`);
+  console.log(`Wins: ${wins}`);
+  console.log(`Losses: ${losses}`);
+  console.log(`Total R: ${totalR}`);
+  console.log(`Average R: ${averageR}`);
+  console.log(`Win rate: ${winRate}`);
+  console.log(`Profit factor: ${profitFactor}`);
   console.log(
-    `Maximum drawdown: ${metrics.maximumDrawdown}R`
+    `Average ATR: ${averageAtr}`
   );
   console.log(
-    `Largest winning trade: ${metrics.largestWinningTrade}R`
+    `Average EMA separation / ATR: ${averageEmaSeparationAtr}`
   );
   console.log(
-    `Largest losing trade: ${metrics.largestLosingTrade}R`
+    `Average breakout distance / ATR: ${averageBreakoutDistanceAtr}`
   );
   console.log(
-    `Longest winning streak: ${metrics.longestWinningStreak}`
-  );
-  console.log(
-    `Longest losing streak: ${metrics.longestLosingStreak}`
+    `Average duration: ${averageDuration} candles`
   );
 }
 
-function printDifference(
-  baseline: ExecutionAudit,
-  comparison: ExecutionAudit,
-  name: string
+function printDirectionBreakdown(
+  trades: TradeObservation[]
 ): void {
-  console.log(`=== ${name} vs Independent ===`);
-  console.log(
-    `Trade reduction: ${
-      baseline.trades.length - comparison.trades.length
-    }`
+  const longTrades = trades.filter(
+    (trade) => trade.direction === "LONG"
   );
-  console.log(
-    `Signals skipped: ${comparison.skippedSignals.length}`
+
+  const shortTrades = trades.filter(
+    (trade) => trade.direction === "SHORT"
   );
-  console.log(
-    `Total R difference: ${
-      comparison.metrics.totalR - baseline.metrics.totalR
-    }`
+
+  console.log("");
+
+  printSummary("LONG", longTrades);
+
+  console.log("");
+
+  printSummary("SHORT", shortTrades);
+}
+
+function printEntryTypeBreakdown(
+  trades: TradeObservation[]
+): void {
+  const initialTrades = trades.filter(
+    (trade) => trade.entryType === "INITIAL"
   );
-  console.log(
-    `Average R difference: ${
-      comparison.metrics.averageR -
-      baseline.metrics.averageR
-    }`
+
+  const stackedTrades = trades.filter(
+    (trade) => trade.entryType === "STACKED"
   );
-  console.log(
-    `Maximum drawdown difference: ${
-      comparison.metrics.maximumDrawdown -
-      baseline.metrics.maximumDrawdown
-    }R`
+
+  console.log("");
+
+  printSummary(
+    "INITIAL ENTRIES",
+    initialTrades
+  );
+
+  console.log("");
+
+  printSummary(
+    "STACKED ENTRIES",
+    stackedTrades
+  );
+
+  console.log("");
+
+  printSummary(
+    "INITIAL LONG",
+    initialTrades.filter(
+      (trade) => trade.direction === "LONG"
+    )
+  );
+
+  console.log("");
+
+  printSummary(
+    "INITIAL SHORT",
+    initialTrades.filter(
+      (trade) => trade.direction === "SHORT"
+    )
+  );
+
+  console.log("");
+
+  printSummary(
+    "STACKED LONG",
+    stackedTrades.filter(
+      (trade) => trade.direction === "LONG"
+    )
+  );
+
+  console.log("");
+
+  printSummary(
+    "STACKED SHORT",
+    stackedTrades.filter(
+      (trade) => trade.direction === "SHORT"
+    )
   );
 }
 
 const signals = generateSignals(candles);
 
-const independent = runIndependentModel(
-  candles,
-  signals
-);
+const resolvedTrades: SimulatedTrade[] = [];
 
-const singlePosition = runSinglePositionModel(
-  candles,
-  signals
-);
+for (const generated of signals) {
+  const trade = simulateGeneratedSignal(
+    candles,
+    generated
+  );
 
-const perDirection = runPerDirectionModel(
-  candles,
-  signals
-);
+  if (trade !== null) {
+    resolvedTrades.push(trade);
+  }
+}
 
 const classifiedTrades =
-  classifySameDirectionTrades(independent.trades);
+  classifySameDirectionTrades(
+    resolvedTrades
+  );
 
-const initialTrades = classifiedTrades.filter(
+const observations = observeTrades(
+  candles,
+  classifiedTrades
+);
+
+const initialTrades = observations.filter(
   (trade) => trade.entryType === "INITIAL"
 );
 
-const stackedTrades = classifiedTrades.filter(
+const stackedTrades = observations.filter(
   (trade) => trade.entryType === "STACKED"
 );
 
-const longSignals = signals.filter(
-  ({ signal }) => signal.direction === "LONG"
-).length;
-
-const shortSignals = signals.filter(
-  ({ signal }) => signal.direction === "SHORT"
-).length;
-
-const stackedR = stackedTrades.reduce(
-  (total, trade) => total + trade.rMultiple,
-  0
-);
-
-const initialR = initialTrades.reduce(
-  (total, trade) => total + trade.rMultiple,
-  0
-);
-
-console.log("=== Execution Model Audit ===");
+console.log("=== Entry Condition Audit ===");
 console.log(`Candles: ${candles.length}`);
 console.log(
   `Range: ${new Date(
@@ -419,84 +515,71 @@ console.log(
     candles.at(-1)?.timestamp ?? 0
   ).toISOString()}`
 );
-console.log(`Generated signals: ${signals.length}`);
-console.log(`LONG signals: ${longSignals}`);
-console.log(`SHORT signals: ${shortSignals}`);
+console.log(
+  `Generated signals: ${signals.length}`
+);
+console.log(
+  `Resolved trades: ${observations.length}`
+);
+console.log(
+  `Unresolved signals: ${
+    signals.length - resolvedTrades.length
+  }`
+);
+console.log(
+  `Initial entries: ${initialTrades.length}`
+);
+console.log(
+  `Stacked entries: ${stackedTrades.length}`
+);
 
 console.log("");
 
-printMetrics(
-  "Independent Execution",
-  independent.trades
+printSummary(
+  "ALL RESOLVED TRADES",
+  observations
+);
+
+printEntryTypeBreakdown(observations);
+
+console.log("");
+
+console.log("=== Direction Breakdown ===");
+
+printDirectionBreakdown(observations);
+
+console.log("");
+
+console.log("=== Initial vs Stacked by Direction ===");
+
+console.log(
+  `Initial LONG: ${
+    initialTrades.filter(
+      (trade) => trade.direction === "LONG"
+    ).length
+  }`
 );
 
 console.log(
-  `Unresolved signals: ${independent.unresolvedSignals.length}`
-);
-
-console.log("");
-
-printMetrics(
-  "Single-Position Execution",
-  singlePosition.trades
+  `Initial SHORT: ${
+    initialTrades.filter(
+      (trade) => trade.direction === "SHORT"
+    ).length
+  }`
 );
 
 console.log(
-  `Unresolved signals: ${singlePosition.unresolvedSignals.length}`
-);
-console.log(
-  `Skipped signals: ${singlePosition.skippedSignals.length}`
-);
-
-console.log("");
-
-printMetrics(
-  "One-Position-Per-Direction Execution",
-  perDirection.trades
+  `Stacked LONG: ${
+    stackedTrades.filter(
+      (trade) => trade.direction === "LONG"
+    ).length
+  }`
 );
 
 console.log(
-  `Unresolved signals: ${perDirection.unresolvedSignals.length}`
-);
-console.log(
-  `Skipped signals: ${perDirection.skippedSignals.length}`
-);
-
-console.log("");
-
-printDifference(
-  independent,
-  singlePosition,
-  "Single-Position Model"
-);
-
-console.log("");
-
-printDifference(
-  independent,
-  perDirection,
-  "Per-Direction Model"
-);
-
-console.log("");
-
-console.log("=== Same-Direction Entry Audit ===");
-console.log(`Resolved trades: ${classifiedTrades.length}`);
-console.log(`Initial entries: ${initialTrades.length}`);
-console.log(`Stacked entries: ${stackedTrades.length}`);
-console.log(`Initial-entry R: ${initialR}`);
-console.log(`Stacked-entry R: ${stackedR}`);
-
-console.log("");
-
-printMetrics(
-  "Initial Same-Direction Entries",
-  initialTrades
-);
-
-console.log("");
-
-printMetrics(
-  "Stacked Same-Direction Entries",
-  stackedTrades
+  `Stacked SHORT: ${
+    stackedTrades.filter(
+      (trade) => trade.direction === "SHORT"
+    ).length
+  }`
 );
