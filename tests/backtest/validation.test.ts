@@ -29,7 +29,7 @@ function createHistoricalCandles(): Candle[] {
     volume: 1000
   });
 
-  // Future candles used by the trade simulator.
+  // Future candle after the breakout.
   candles.push({
     timestamp: 51,
     open: 153,
@@ -39,10 +39,11 @@ function createHistoricalCandles(): Candle[] {
     volume: 1000
   });
 
+  // Future candle reaches the second take-profit.
   candles.push({
     timestamp: 52,
     open: 153.5,
-    high: 158,
+    high: 160,
     low: 153,
     close: 157,
     volume: 1000
