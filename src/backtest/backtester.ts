@@ -1,4 +1,7 @@
-import type { Candle } from "../domain/types.js";
+import type {
+  Candle,
+  SignalCandidate
+} from "../domain/types.js";
 import type { Strategy } from "../strategy/strategy.js";
 import {
   simulateTrade,
@@ -7,6 +10,7 @@ import {
 
 export type BacktestResult = {
   trades: SimulatedTrade[];
+  unresolvedSignals: SignalCandidate[];
 };
 
 export function runBacktest(
@@ -14,6 +18,7 @@ export function runBacktest(
   strategy: Strategy
 ): BacktestResult {
   const trades: SimulatedTrade[] = [];
+  const unresolvedSignals: SignalCandidate[] = [];
 
   for (let i = 0; i < candles.length; i += 1) {
     const availableCandles = candles.slice(0, i + 1);
@@ -26,17 +31,26 @@ export function runBacktest(
 
     const futureCandles = candles.slice(i + 1);
 
-    const trade = simulateTrade(signal, futureCandles);
+    const trade = simulateTrade(
+      signal,
+      futureCandles
+    );
 
-    if (trade !== null) {
-      trades.push({
-        ...trade,
-        entryTimestamp: candles[i]?.timestamp ?? trade.entryTimestamp
-      });
+    if (trade === null) {
+      unresolvedSignals.push(signal);
+      continue;
     }
+
+    trades.push({
+      ...trade,
+      entryTimestamp:
+        candles[i]?.timestamp ??
+        trade.entryTimestamp
+    });
   }
 
   return {
-    trades
+    trades,
+    unresolvedSignals
   };
 }
