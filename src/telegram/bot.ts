@@ -16,6 +16,7 @@ type TelegramResponse<T> = {
 };
 
 const TELEGRAM_API = "https://api.telegram.org";
+const POLLING_RETRY_DELAY_MS = 2_000;
 
 function getToken(): string {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -94,6 +95,12 @@ async function getUpdates(
   );
 }
 
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
 export async function startBot(): Promise<void> {
   const token = getToken();
 
@@ -102,41 +109,50 @@ export async function startBot(): Promise<void> {
   console.log("TSD Telegram bot starting...");
 
   while (true) {
-    const updates = await getUpdates(token, offset);
+    try {
+      const updates = await getUpdates(token, offset);
 
-    for (const update of updates) {
-      offset = update.update_id + 1;
+      for (const update of updates) {
+        offset = update.update_id + 1;
 
-      const message = update.message;
-      const text = message?.text;
+        const message = update.message;
+        const text = message?.text;
 
-      if (
-        message === undefined ||
-        text === undefined
-      ) {
-        continue;
+        if (
+          message === undefined ||
+          text === undefined
+        ) {
+          continue;
+        }
+
+        if (!text.startsWith("/")) {
+          continue;
+        }
+
+        const command = text
+          .trim()
+          .split(/\s+/)[0]
+          ?.toLowerCase();
+
+        if (command === undefined) {
+          continue;
+        }
+
+        const response = handleCommand(command);
+
+        await sendMessage(
+          token,
+          message.chat.id,
+          response
+        );
       }
-
-      if (!text.startsWith("/")) {
-        continue;
-      }
-
-      const command = text
-        .trim()
-        .split(/\s+/)[0]
-        ?.toLowerCase();
-
-      if (command === undefined) {
-        continue;
-      }
-
-      const response = handleCommand(command);
-
-      await sendMessage(
-        token,
-        message.chat.id,
-        response
+    } catch (error) {
+      console.error(
+        "Telegram polling failed. Retrying in 2 seconds.",
+        error
       );
+
+      await sleep(POLLING_RETRY_DELAY_MS);
     }
   }
 }
