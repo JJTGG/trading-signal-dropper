@@ -84,6 +84,37 @@ console.log(
   `Unresolved signals: ${result.backtest.unresolvedSignals.length}`
 );
 
+if (result.backtest.unresolvedSignals.length > 0) {
+  console.log("");
+  console.log("Unresolved signals");
+  console.log("------------------");
+
+  for (
+    const unresolved of result.backtest.unresolvedSignals
+  ) {
+    const {
+      signal,
+      signalTimestamp
+    } = unresolved;
+
+    console.log("");
+    console.log(
+      `Timestamp: ${new Date(
+        signalTimestamp
+      ).toISOString()}`
+    );
+    console.log(`Direction: ${signal.direction}`);
+    console.log(`Entry: ${signal.entry}`);
+    console.log(`Stop loss: ${signal.stopLoss}`);
+    console.log(
+      `Take profits: ${signal.takeProfits.join(", ")}`
+    );
+    console.log(`Strategy: ${signal.strategy}`);
+    console.log(`Timeframe: ${signal.timeframe}`);
+    console.log(`Reason: ${signal.reason}`);
+  }
+}
+
 console.log("");
 console.log("Metrics");
 console.log("-------");
