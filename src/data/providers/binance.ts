@@ -1,5 +1,8 @@
 import type { Candle } from "../../domain/types.js";
-import type { HistoricalDataProvider } from "../historical.js";
+import type {
+  HistoricalDataProvider,
+  HistoricalDataRequest
+} from "../historical.js";
 
 const BINANCE_BASE_URL = "https://data-api.binance.vision";
 
@@ -21,11 +24,12 @@ type BinanceKline = [
 export class BinanceHistoricalDataProvider
   implements HistoricalDataProvider
 {
-  async getCandles(
-    symbol: string,
-    timeframe: string,
-    limit: number
-  ): Promise<Candle[]> {
+  async getCandles({
+    symbol,
+    timeframe,
+    limit,
+    endTime
+  }: HistoricalDataRequest): Promise<Candle[]> {
     if (!symbol.trim()) {
       throw new Error("Symbol is required.");
     }
@@ -38,11 +42,22 @@ export class BinanceHistoricalDataProvider
       throw new Error("Limit must be a positive integer.");
     }
 
+    if (
+      endTime !== undefined &&
+      (!Number.isFinite(endTime) || endTime < 0)
+    ) {
+      throw new Error("End time must be a valid timestamp.");
+    }
+
     const url = new URL("/api/v3/klines", BINANCE_BASE_URL);
 
     url.searchParams.set("symbol", symbol.toUpperCase());
     url.searchParams.set("interval", timeframe);
     url.searchParams.set("limit", String(limit));
+
+    if (endTime !== undefined) {
+      url.searchParams.set("endTime", String(endTime));
+    }
 
     const response = await fetch(url);
 
