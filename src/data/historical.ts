@@ -1,9 +1,12 @@
 import type { Candle } from "../domain/types.js";
 
+export type HistoricalDataRequest = {
+  symbol: string;
+  timeframe: string;
+  limit: number;
+  endTime?: number;
+};
+
 export interface HistoricalDataProvider {
-  getCandles(
-    symbol: string,
-    timeframe: string,
-    limit: number
-  ): Promise<Candle[]>;
+  getCandles(request: HistoricalDataRequest): Promise<Candle[]>;
 }
