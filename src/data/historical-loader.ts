@@ -28,16 +28,26 @@ export class HistoricalDataLoader {
 
     while (candles.length < candleCount) {
       const remaining = candleCount - candles.length;
+      const limit = Math.min(
+        remaining,
+        MAX_CANDLES_PER_REQUEST
+      );
 
-      const batch = await this.provider.getCandles({
-        symbol,
-        timeframe,
-        limit: Math.min(
-          remaining,
-          MAX_CANDLES_PER_REQUEST
-        ),
-        endTime
-      });
+      const request =
+        endTime === undefined
+          ? {
+              symbol,
+              timeframe,
+              limit
+            }
+          : {
+              symbol,
+              timeframe,
+              limit,
+              endTime
+            };
+
+      const batch = await this.provider.getCandles(request);
 
       if (batch.length === 0) {
         break;
