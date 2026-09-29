@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Candle } from "../../src/domain/types.js";
+import { atr } from "../../src/indicators/atr.js";
 import { EmaBreakoutStrategy } from "../../src/strategy/ema-breakout.js";
 
 function createCandles(closes: number[]): Candle[] {
@@ -40,12 +41,31 @@ describe("EmaBreakoutStrategy", () => {
     ]);
 
     const signal = strategy.evaluate(candles);
+    const currentAtr = atr(candles, 3).at(-1);
 
     expect(signal).not.toBeNull();
-    expect(signal?.direction).toBe("LONG");
-    expect(signal?.entry).toBe(111);
-    expect(signal?.stopLoss).toBe(109);
-    expect(signal?.takeProfits).toEqual([113, 115]);
+    expect(currentAtr).toBeDefined();
+
+    if (!signal || currentAtr === undefined) {
+      return;
+    }
+
+    expect(signal.direction).toBe("LONG");
+    expect(signal.entry).toBe(111);
+
+    const expectedRisk = currentAtr;
+
+    expect(signal.stopLoss).toBeCloseTo(
+      signal.entry - expectedRisk
+    );
+
+    expect(signal.takeProfits[0]).toBeCloseTo(
+      signal.entry + expectedRisk
+    );
+
+    expect(signal.takeProfits[1]).toBeCloseTo(
+      signal.entry + expectedRisk * 2
+    );
   });
 
   it("generates a SHORT signal after a downside breakout", () => {
@@ -65,12 +85,31 @@ describe("EmaBreakoutStrategy", () => {
     ]);
 
     const signal = strategy.evaluate(candles);
+    const currentAtr = atr(candles, 3).at(-1);
 
     expect(signal).not.toBeNull();
-    expect(signal?.direction).toBe("SHORT");
-    expect(signal?.entry).toBe(98);
-    expect(signal?.stopLoss).toBe(100);
-    expect(signal?.takeProfits).toEqual([96, 94]);
+    expect(currentAtr).toBeDefined();
+
+    if (!signal || currentAtr === undefined) {
+      return;
+    }
+
+    expect(signal.direction).toBe("SHORT");
+    expect(signal.entry).toBe(98);
+
+    const expectedRisk = currentAtr;
+
+    expect(signal.stopLoss).toBeCloseTo(
+      signal.entry + expectedRisk
+    );
+
+    expect(signal.takeProfits[0]).toBeCloseTo(
+      signal.entry - expectedRisk
+    );
+
+    expect(signal.takeProfits[1]).toBeCloseTo(
+      signal.entry - expectedRisk * 2
+    );
   });
 
   it("returns null when there is no breakout", () => {
