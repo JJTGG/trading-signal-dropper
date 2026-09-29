@@ -1,6 +1,9 @@
 import type { Candle, SignalCandidate } from "../domain/types.js";
 
-export type TradeOutcome = "WIN" | "LOSS";
+export type TradeOutcome =
+  | "WIN"
+  | "LOSS"
+  | "BREAKEVEN";
 
 export type SimulatedTrade = {
   signal: SignalCandidate;
@@ -22,9 +25,13 @@ export function simulateTrade(
 
   const entry = signal.entry;
   const stop = signal.stopLoss;
-  const firstTakeProfit = signal.takeProfits[0];
+  const [firstTakeProfit, secondTakeProfit] =
+    signal.takeProfits;
 
-  if (firstTakeProfit === undefined) {
+  if (
+    firstTakeProfit === undefined ||
+    secondTakeProfit === undefined
+  ) {
     return null;
   }
 
@@ -34,91 +41,203 @@ export function simulateTrade(
     return null;
   }
 
+  const entryTimestamp = candles[0]?.timestamp;
+
+  if (entryTimestamp === undefined) {
+    return null;
+  }
+
+  let firstTargetHit = false;
+
   for (const candle of candles) {
     if (signal.direction === "LONG") {
       const stopHit = candle.low <= stop;
-      const targetHit = candle.high >= firstTakeProfit;
+      const firstTargetHitThisCandle =
+        candle.high >= firstTakeProfit;
+      const secondTargetHitThisCandle =
+        candle.high >= secondTakeProfit;
 
-      // Conservative rule when both are touched in one candle:
-      // assume the stop was hit first.
-      if (stopHit && targetHit) {
-        return {
-          signal,
-          entryPrice: entry,
-          exitPrice: stop,
-          outcome: "LOSS",
-          rMultiple: -1,
-          entryTimestamp: candles[0]?.timestamp ?? candle.timestamp,
-          exitTimestamp: candle.timestamp
-        };
+      if (!firstTargetHit) {
+        if (stopHit) {
+          return createTrade(
+            signal,
+            entry,
+            stop,
+            "LOSS",
+            -1,
+            entryTimestamp,
+            candle.timestamp
+          );
+        }
+
+        if (!firstTargetHitThisCandle) {
+          continue;
+        }
+
+        // Conservative rule:
+        // if the stop and target are both touched in
+        // the same candle, assume the stop was hit first.
+        if (stopHit) {
+          return createTrade(
+            signal,
+            entry,
+            stop,
+            "LOSS",
+            -1,
+            entryTimestamp,
+            candle.timestamp
+          );
+        }
+
+        firstTargetHit = true;
+
+        if (secondTargetHitThisCandle) {
+          return createTrade(
+            signal,
+            entry,
+            secondTakeProfit,
+            "WIN",
+            1.5,
+            entryTimestamp,
+            candle.timestamp
+          );
+        }
+
+        continue;
       }
 
+      // TP1 has already closed 50% of the position.
+      // The remaining 50% is now waiting for TP2 or SL.
       if (stopHit) {
-        return {
+        return createTrade(
           signal,
-          entryPrice: entry,
-          exitPrice: stop,
-          outcome: "LOSS",
-          rMultiple: -1,
-          entryTimestamp: candles[0]?.timestamp ?? candle.timestamp,
-          exitTimestamp: candle.timestamp
-        };
+          entry,
+          stop,
+          "BREAKEVEN",
+          0,
+          entryTimestamp,
+          candle.timestamp
+        );
       }
 
-      if (targetHit) {
-        return {
+      if (secondTargetHitThisCandle) {
+        return createTrade(
           signal,
-          entryPrice: entry,
-          exitPrice: firstTakeProfit,
-          outcome: "WIN",
-          rMultiple: 1,
-          entryTimestamp: candles[0]?.timestamp ?? candle.timestamp,
-          exitTimestamp: candle.timestamp
-        };
+          entry,
+          secondTakeProfit,
+          "WIN",
+          1.5,
+          entryTimestamp,
+          candle.timestamp
+        );
       }
+
+      continue;
     }
 
-    if (signal.direction === "SHORT") {
-      const stopHit = candle.high >= stop;
-      const targetHit = candle.low <= firstTakeProfit;
+    const stopHit = candle.high >= stop;
+    const firstTargetHitThisCandle =
+      candle.low <= firstTakeProfit;
+    const secondTargetHitThisCandle =
+      candle.low <= secondTakeProfit;
 
-      if (stopHit && targetHit) {
-        return {
-          signal,
-          entryPrice: entry,
-          exitPrice: stop,
-          outcome: "LOSS",
-          rMultiple: -1,
-          entryTimestamp: candles[0]?.timestamp ?? candle.timestamp,
-          exitTimestamp: candle.timestamp
-        };
-      }
-
+    if (!firstTargetHit) {
       if (stopHit) {
-        return {
+        return createTrade(
           signal,
-          entryPrice: entry,
-          exitPrice: stop,
-          outcome: "LOSS",
-          rMultiple: -1,
-          entryTimestamp: candles[0]?.timestamp ?? candle.timestamp,
-          exitTimestamp: candle.timestamp
-        };
+          entry,
+          stop,
+          "LOSS",
+          -1,
+          entryTimestamp,
+          candle.timestamp
+        );
       }
 
-      if (targetHit) {
-        return {
-          signal,
-          entryPrice: entry,
-          exitPrice: firstTakeProfit,
-          outcome: "WIN",
-          rMultiple: 1,
-          entryTimestamp: candles[0]?.timestamp ?? candle.timestamp,
-          exitTimestamp: candle.timestamp
-        };
+      if (!firstTargetHitThisCandle) {
+        continue;
       }
+
+      // Conservative rule:
+      // if the stop and target are both touched in
+      // the same candle, assume the stop was hit first.
+      if (stopHit) {
+        return createTrade(
+          signal,
+          entry,
+          stop,
+          "LOSS",
+          -1,
+          entryTimestamp,
+          candle.timestamp
+        );
+      }
+
+      firstTargetHit = true;
+
+      if (secondTargetHitThisCandle) {
+        return createTrade(
+          signal,
+          entry,
+          secondTakeProfit,
+          "WIN",
+          1.5,
+          entryTimestamp,
+          candle.timestamp
+        );
+      }
+
+      continue;
+    }
+
+    // TP1 has already closed 50% of the position.
+    // The remaining 50% is now waiting for TP2 or SL.
+    if (stopHit) {
+      return createTrade(
+        signal,
+        entry,
+        stop,
+        "BREAKEVEN",
+        0,
+        entryTimestamp,
+        candle.timestamp
+      );
+    }
+
+    if (secondTargetHitThisCandle) {
+      return createTrade(
+        signal,
+        entry,
+        secondTakeProfit,
+        "WIN",
+        1.5,
+        entryTimestamp,
+        candle.timestamp
+      );
     }
   }
 
+  // TP1 was reached, but the remaining position
+  // was not resolved by TP2 or the stop.
   return null;
+}
+
+function createTrade(
+  signal: SignalCandidate,
+  entryPrice: number,
+  exitPrice: number,
+  outcome: TradeOutcome,
+  rMultiple: number,
+  entryTimestamp: number,
+  exitTimestamp: number
+): SimulatedTrade {
+  return {
+    signal,
+    entryPrice,
+    exitPrice,
+    outcome,
+    rMultiple,
+    entryTimestamp,
+    exitTimestamp
+  };
 }
