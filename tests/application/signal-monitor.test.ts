@@ -33,19 +33,25 @@ function createNonBreakoutCandles(): Candle[] {
   return createCandles(closes);
 }
 
+function createCurrentCandle(
+  timestamp: number
+): Candle {
+  return {
+    timestamp,
+    open: 200,
+    high: 201,
+    low: 199,
+    close: 200
+  };
+}
+
 describe("SignalMonitor", () => {
-  it("evaluates only when a new candle appears", async () => {
+  it("evaluates a new candle and uses the closed candle boundary", async () => {
     const provider: HistoricalDataProvider = {
       getCandles: vi
         .fn()
         .mockResolvedValueOnce([
-          {
-            timestamp: 200,
-            open: 200,
-            high: 201,
-            low: 199,
-            close: 200
-          }
+          createCurrentCandle(200)
         ])
         .mockResolvedValueOnce(
           createBullishBreakoutCandles()
@@ -83,30 +89,18 @@ describe("SignalMonitor", () => {
     );
   });
 
-  it("does not evaluate the same candle twice", async () => {
+  it("does not evaluate an acknowledged candle twice", async () => {
     const provider: HistoricalDataProvider = {
       getCandles: vi
         .fn()
         .mockResolvedValueOnce([
-          {
-            timestamp: 200,
-            open: 200,
-            high: 201,
-            low: 199,
-            close: 200
-          }
+          createCurrentCandle(200)
         ])
         .mockResolvedValueOnce(
           createNonBreakoutCandles()
         )
         .mockResolvedValueOnce([
-          {
-            timestamp: 200,
-            open: 200,
-            high: 201,
-            low: 199,
-            close: 200
-          }
+          createCurrentCandle(200)
         ])
     };
 
@@ -115,6 +109,11 @@ describe("SignalMonitor", () => {
     });
 
     const firstResult = await monitor.check();
+
+    monitor.markProcessed(
+      firstResult.candleTimestamp
+    );
+
     const secondResult = await monitor.check();
 
     expect(firstResult.newCandle).toBe(true);
@@ -126,30 +125,18 @@ describe("SignalMonitor", () => {
     expect(provider.getCandles).toHaveBeenCalledTimes(3);
   });
 
-  it("evaluates again when the candle timestamp changes", async () => {
+  it("evaluates an unprocessed candle again when delivery has not been acknowledged", async () => {
     const provider: HistoricalDataProvider = {
       getCandles: vi
         .fn()
         .mockResolvedValueOnce([
-          {
-            timestamp: 200,
-            open: 200,
-            high: 201,
-            low: 199,
-            close: 200
-          }
+          createCurrentCandle(200)
         ])
         .mockResolvedValueOnce(
-          createNonBreakoutCandles()
+          createBullishBreakoutCandles()
         )
         .mockResolvedValueOnce([
-          {
-            timestamp: 215,
-            open: 215,
-            high: 216,
-            low: 214,
-            close: 215
-          }
+          createCurrentCandle(200)
         ])
         .mockResolvedValueOnce(
           createBullishBreakoutCandles()
@@ -157,18 +144,17 @@ describe("SignalMonitor", () => {
     };
 
     const monitor = new SignalMonitor(provider, {
-      symbol: "BTCUSDT",
-      timeframe: "15m"
+      symbol: "BTCUSDT"
     });
 
     const firstResult = await monitor.check();
     const secondResult = await monitor.check();
 
     expect(firstResult.newCandle).toBe(true);
-    expect(firstResult.signal).toBeNull();
+    expect(firstResult.signal).not.toBeNull();
 
     expect(secondResult.newCandle).toBe(true);
-    expect(secondResult.candleTimestamp).toBe(215);
+    expect(secondResult.candleTimestamp).toBe(200);
     expect(secondResult.signal).not.toBeNull();
 
     expect(provider.getCandles).toHaveBeenNthCalledWith(
@@ -177,7 +163,7 @@ describe("SignalMonitor", () => {
         symbol: "BTCUSDT",
         timeframe: "15m",
         limit: 100,
-        endTime: 214
+        endTime: 199
       }
     );
   });
