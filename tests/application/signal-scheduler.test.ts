@@ -3,9 +3,7 @@ import {
   SignalScheduler
 } from "../../src/application/signal-scheduler.js";
 import type {
-  SignalMonitorPort
-} from "../../src/application/signal-dispatcher.js";
-import type {
+  SignalMonitorPort,
   SignalNotifier
 } from "../../src/application/signal-dispatcher.js";
 import type {
@@ -152,12 +150,22 @@ describe("SignalScheduler", () => {
   });
 
   it("does not allow the scheduler to start twice", async () => {
+    let releaseCheck:
+      (() => void) | undefined;
+
+    const checkStarted =
+      new Promise<void>((resolve) => {
+        releaseCheck = resolve;
+      });
+
     const monitor: SignalMonitorPort = {
-      check: vi
-        .fn()
-        .mockImplementation(
-          () => new Promise(() => {})
-        ),
+      check: vi.fn().mockImplementation(
+        async () => {
+          await checkStarted;
+
+          return createResult(1);
+        }
+      ),
       markProcessed: vi.fn()
     };
 
@@ -185,8 +193,11 @@ describe("SignalScheduler", () => {
 
     scheduler.stop();
 
-    expect(scheduler.isRunning()).toBe(true);
+    releaseCheck?.();
 
-    void firstStart;
+    await firstStart;
+
+    expect(scheduler.isRunning()).toBe(false);
+    expect(monitor.check).toHaveBeenCalledTimes(1);
   });
 });
