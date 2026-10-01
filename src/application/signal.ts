@@ -7,6 +7,7 @@ const DEFAULT_SIGNAL_CANDLE_COUNT = 100;
 export type SignalRequest = {
   symbol: string;
   timeframe?: string;
+  endTime?: number;
 };
 
 export type GeneratedSignal = {
@@ -18,7 +19,8 @@ export async function generateSignal(
   provider: HistoricalDataProvider,
   {
     symbol,
-    timeframe = "15m"
+    timeframe = "15m",
+    endTime
   }: SignalRequest
 ): Promise<GeneratedSignal | null> {
   if (!symbol.trim()) {
@@ -29,11 +31,28 @@ export async function generateSignal(
     throw new Error("Timeframe is required.");
   }
 
-  const candles = await provider.getCandles({
-    symbol,
-    timeframe,
-    limit: DEFAULT_SIGNAL_CANDLE_COUNT
-  });
+  if (
+    endTime !== undefined &&
+    (!Number.isFinite(endTime) || endTime < 0)
+  ) {
+    throw new Error("End time must be a valid timestamp.");
+  }
+
+  const request =
+    endTime === undefined
+      ? {
+          symbol,
+          timeframe,
+          limit: DEFAULT_SIGNAL_CANDLE_COUNT
+        }
+      : {
+          symbol,
+          timeframe,
+          limit: DEFAULT_SIGNAL_CANDLE_COUNT,
+          endTime
+        };
+
+  const candles = await provider.getCandles(request);
 
   const strategy = new EmaBreakoutStrategy({
     timeframe
