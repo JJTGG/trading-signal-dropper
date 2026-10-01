@@ -22,6 +22,9 @@ export class SignalMonitor {
   private lastProcessedCandleTimestamp:
     number | undefined;
 
+  private lastEvaluatedCandleTimestamp:
+    number | undefined;
+
   constructor(
     private readonly provider: HistoricalDataProvider,
     {
@@ -88,7 +91,7 @@ export class SignalMonitor {
       }
     );
 
-    this.lastProcessedCandleTimestamp =
+    this.lastEvaluatedCandleTimestamp =
       candleTimestamp;
 
     return {
@@ -96,5 +99,19 @@ export class SignalMonitor {
       candleTimestamp,
       signal
     };
+  }
+
+  markProcessed(candleTimestamp: number): void {
+    if (
+      this.lastEvaluatedCandleTimestamp !==
+      candleTimestamp
+    ) {
+      throw new Error(
+        "Cannot mark an unevaluated candle as processed."
+      );
+    }
+
+    this.lastProcessedCandleTimestamp =
+      candleTimestamp;
   }
 }
