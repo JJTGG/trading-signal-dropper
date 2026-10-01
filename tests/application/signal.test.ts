@@ -84,4 +84,25 @@ describe("generateSignal", () => {
 
     expect(provider.getCandles).not.toHaveBeenCalled();
   });
+
+  it("passes an end time to the data provider", async () => {
+    const provider: HistoricalDataProvider = {
+      getCandles: vi
+        .fn()
+        .mockResolvedValue(createNonBreakoutCandles())
+    };
+
+    await generateSignal(provider, {
+      symbol: "BTCUSDT",
+      timeframe: "15m",
+      endTime: 123456789
+    });
+
+    expect(provider.getCandles).toHaveBeenCalledWith({
+      symbol: "BTCUSDT",
+      timeframe: "15m",
+      limit: 100,
+      endTime: 123456789
+    });
+  });
 });
