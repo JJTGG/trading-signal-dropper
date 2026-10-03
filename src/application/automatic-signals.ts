@@ -28,12 +28,17 @@ export function createAutomaticSignalScheduler(
     timeframe
   });
 
+  const schedulerConfig: SignalSchedulerConfig = {
+    intervalMs
+  };
+
+  if (onError !== undefined) {
+    schedulerConfig.onError = onError;
+  }
+
   return new SignalScheduler(
     monitor,
     notifier,
-    {
-      intervalMs,
-      onError
-    }
+    schedulerConfig
   );
 }
