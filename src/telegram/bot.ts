@@ -18,6 +18,7 @@ type TelegramResponse<T> = {
 };
 
 const TELEGRAM_API = "https://api.telegram.org";
+const TELEGRAM_POLL_TIMEOUT_SECONDS = 5;
 const POLLING_RETRY_DELAY_MS = 2_000;
 
 function getToken(): string {
@@ -92,7 +93,7 @@ async function getUpdates(
     "getUpdates",
     {
       offset,
-      timeout: 30
+      timeout: TELEGRAM_POLL_TIMEOUT_SECONDS
     }
   );
 }
