@@ -88,14 +88,37 @@ async function getUpdates(
   token: string,
   offset: number
 ): Promise<TelegramUpdate[]> {
-  return telegramRequest<TelegramUpdate[]>(
-    token,
-    "getUpdates",
+  const response = await fetch(
+    `${TELEGRAM_API}/bot${token}/getUpdates`,
     {
-      offset,
-      timeout: TELEGRAM_POLL_TIMEOUT_SECONDS
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Connection": "close"
+      },
+      body: JSON.stringify({
+        offset,
+        timeout: TELEGRAM_POLL_TIMEOUT_SECONDS
+      })
     }
   );
+
+  if (!response.ok) {
+    throw new Error(
+      `Telegram API request failed: ${response.status} ${response.statusText}`
+    );
+  }
+
+  const data =
+    (await response.json()) as TelegramResponse<TelegramUpdate[]>;
+
+  if (!data.ok) {
+    throw new Error(
+      "Telegram API rejected the request: getUpdates"
+    );
+  }
+
+  return data.result;
 }
 
 function sleep(milliseconds: number): Promise<void> {
