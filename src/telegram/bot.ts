@@ -1,3 +1,5 @@
+import https from "node:https";
+
 import { BinanceHistoricalDataProvider } from "../data/providers/binance.js";
 import { handleCommand } from "./commands.js";
 import { handleSignalCommand } from "./signal.js";
@@ -33,44 +35,120 @@ function getToken(): string {
   return token;
 }
 
-async function telegramRequest<T>(
+function telegramRequest<T>(
   token: string,
   method: string,
   body?: Record<string, unknown>
 ): Promise<T> {
-  const requestInit: RequestInit = body
-    ? {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(body)
+  return new Promise((resolve, reject) => {
+    const url = new URL(
+      `${TELEGRAM_API}/bot${token}/${method}`
+    );
+
+    const payload =
+      body === undefined
+        ? undefined
+        : JSON.stringify(body);
+
+    const request = https.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: `${url.pathname}${url.search}`,
+        method: payload === undefined ? "GET" : "POST",
+        headers:
+          payload === undefined
+            ? {
+                Connection: "close"
+              }
+            : {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(
+                  payload
+                ),
+                Connection: "close"
+              },
+        agent: false,
+        timeout:
+          method === "getUpdates"
+            ? (TELEGRAM_POLL_TIMEOUT_SECONDS + 10) *
+              1_000
+            : 10_000
+      },
+      (response) => {
+        let responseBody = "";
+
+        response.setEncoding("utf8");
+
+        response.on("data", (chunk) => {
+          responseBody += chunk;
+        });
+
+        response.on("end", () => {
+          const statusCode =
+            response.statusCode ?? 0;
+
+          if (
+            statusCode < 200 ||
+            statusCode >= 300
+          ) {
+            reject(
+              new Error(
+                `Telegram API request failed: ${statusCode} ${response.statusMessage ?? ""}`.trim()
+              )
+            );
+            return;
+          }
+
+          let data: TelegramResponse<T>;
+
+          try {
+            data =
+              JSON.parse(
+                responseBody
+              ) as TelegramResponse<T>;
+          } catch {
+            reject(
+              new Error(
+                "Telegram API returned invalid JSON."
+              )
+            );
+            return;
+          }
+
+          if (!data.ok) {
+            reject(
+              new Error(
+                `Telegram API rejected the request: ${method}`
+              )
+            );
+            return;
+          }
+
+          resolve(data.result);
+        });
+
+        response.on("error", reject);
       }
-    : {
-        method: "GET"
-      };
-
-  const response = await fetch(
-    `${TELEGRAM_API}/bot${token}/${method}`,
-    requestInit
-  );
-
-  if (!response.ok) {
-    throw new Error(
-      `Telegram API request failed: ${response.status} ${response.statusText}`
     );
-  }
 
-  const data =
-    (await response.json()) as TelegramResponse<T>;
+    request.on("timeout", () => {
+      request.destroy(
+        new Error(
+          "Telegram API request timed out."
+        )
+      );
+    });
 
-  if (!data.ok) {
-    throw new Error(
-      `Telegram API rejected the request: ${method}`
-    );
-  }
+    request.on("error", reject);
 
-  return data.result;
+    if (payload !== undefined) {
+      request.write(payload);
+    }
+
+    request.end();
+  });
 }
 
 async function sendMessage(
@@ -88,37 +166,14 @@ async function getUpdates(
   token: string,
   offset: number
 ): Promise<TelegramUpdate[]> {
-  const response = await fetch(
-    `${TELEGRAM_API}/bot${token}/getUpdates`,
+  return telegramRequest<TelegramUpdate[]>(
+    token,
+    "getUpdates",
     {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Connection": "close"
-      },
-      body: JSON.stringify({
-        offset,
-        timeout: TELEGRAM_POLL_TIMEOUT_SECONDS
-      })
+      offset,
+      timeout: TELEGRAM_POLL_TIMEOUT_SECONDS
     }
   );
-
-  if (!response.ok) {
-    throw new Error(
-      `Telegram API request failed: ${response.status} ${response.statusText}`
-    );
-  }
-
-  const data =
-    (await response.json()) as TelegramResponse<TelegramUpdate[]>;
-
-  if (!data.ok) {
-    throw new Error(
-      "Telegram API rejected the request: getUpdates"
-    );
-  }
-
-  return data.result;
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -137,7 +192,10 @@ export async function startBot(): Promise<void> {
 
   while (true) {
     try {
-      const updates = await getUpdates(token, offset);
+      const updates = await getUpdates(
+        token,
+        offset
+      );
 
       for (const update of updates) {
         offset = update.update_id + 1;
