@@ -20,7 +20,7 @@ type TelegramResponse<T> = {
 };
 
 const TELEGRAM_API = "https://api.telegram.org";
-const TELEGRAM_POLL_TIMEOUT_SECONDS = 5;
+const TELEGRAM_POLL_TIMEOUT_SECONDS = 0;
 const POLLING_RETRY_DELAY_MS = 2_000;
 
 function getToken(): string {
