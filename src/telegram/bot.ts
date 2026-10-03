@@ -72,7 +72,7 @@ function telegramRequest<T>(
         agent: false,
         timeout:
           method === "getUpdates"
-            ? (TELEGRAM_POLL_TIMEOUT_SECONDS + 10) *
+            ? (TELEGRAM_POLL_TIMEOUT_SECONDS + 25) *
               1_000
             : 10_000
       },
