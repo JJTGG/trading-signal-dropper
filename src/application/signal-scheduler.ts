@@ -10,10 +10,17 @@ type SleepFunction = (
   milliseconds: number
 ) => Promise<void>;
 
+export type SignalSchedulerCycle = {
+  newCandle: boolean;
+  candleTimestamp: number;
+  signalDetected: boolean;
+};
+
 export type SignalSchedulerConfig = {
   intervalMs?: number;
   sleep?: SleepFunction;
   onError?: (error: unknown) => void;
+  onCycle?: (cycle: SignalSchedulerCycle) => void;
 };
 
 function defaultSleep(
@@ -28,11 +35,27 @@ function defaultOnError(error: unknown): void {
   console.error("Signal polling failed.", error);
 }
 
+function defaultOnCycle(
+  cycle: SignalSchedulerCycle
+): void {
+  console.log(
+    [
+      "Automatic signal check completed.",
+      `New candle: ${cycle.newCandle}`,
+      `Candle timestamp: ${cycle.candleTimestamp}`,
+      `Signal detected: ${cycle.signalDetected}`
+    ].join(" ")
+  );
+}
+
 export class SignalScheduler {
   private readonly intervalMs: number;
   private readonly sleep: SleepFunction;
   private readonly onError: (
     error: unknown
+  ) => void;
+  private readonly onCycle: (
+    cycle: SignalSchedulerCycle
   ) => void;
 
   private running = false;
@@ -44,7 +67,8 @@ export class SignalScheduler {
     {
       intervalMs = DEFAULT_POLL_INTERVAL_MS,
       sleep = defaultSleep,
-      onError = defaultOnError
+      onError = defaultOnError,
+      onCycle = defaultOnCycle
     }: SignalSchedulerConfig = {}
   ) {
     if (
@@ -59,6 +83,7 @@ export class SignalScheduler {
     this.intervalMs = intervalMs;
     this.sleep = sleep;
     this.onError = onError;
+    this.onCycle = onCycle;
   }
 
   async start(): Promise<void> {
@@ -74,10 +99,18 @@ export class SignalScheduler {
     try {
       while (!this.stopRequested) {
         try {
-          await dispatchSignalCheck(
+          const result = await dispatchSignalCheck(
             this.monitor,
             this.notifier
           );
+
+          this.onCycle({
+            newCandle: result.newCandle,
+            candleTimestamp:
+              result.candleTimestamp,
+            signalDetected:
+              result.signal !== null
+          });
         } catch (error) {
           this.onError(error);
         }
