@@ -21,6 +21,7 @@ type TelegramResponse<T> = {
 
 const TELEGRAM_API = "https://api.telegram.org";
 const TELEGRAM_POLL_TIMEOUT_SECONDS = 0;
+const TELEGRAM_SUCCESS_POLL_DELAY_MS = 1_000;
 const POLLING_RETRY_DELAY_MS = 2_000;
 
 function getToken(): string {
@@ -259,6 +260,10 @@ export async function startBot(): Promise<void> {
           );
         }
       }
+
+      await sleep(
+        TELEGRAM_SUCCESS_POLL_DELAY_MS
+      );
     } catch (error) {
       console.error(
         "Telegram polling failed. Retrying in 2 seconds.",
