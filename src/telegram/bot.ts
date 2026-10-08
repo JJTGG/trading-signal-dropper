@@ -1,18 +1,10 @@
 import https from "node:https";
 
 import { BinanceHistoricalDataProvider } from "../data/providers/binance.js";
-import { handleCommand } from "./commands.js";
-import { handleSignalCommand } from "./signal.js";
-
-type TelegramUpdate = {
-  update_id: number;
-  message?: {
-    chat: {
-      id: number;
-    };
-    text?: string;
-  };
-};
+import {
+  handleTelegramUpdate,
+  type TelegramUpdate
+} from "./update-handler.js";
 
 type TelegramResponse<T> = {
   ok: boolean;
@@ -57,14 +49,16 @@ function telegramRequest<T>(
         hostname: url.hostname,
         port: url.port || 443,
         path: `${url.pathname}${url.search}`,
-        method: payload === undefined ? "GET" : "POST",
+        method:
+          payload === undefined ? "GET" : "POST",
         headers:
           payload === undefined
             ? {
                 Connection: "close"
               }
             : {
-                "Content-Type": "application/json",
+                "Content-Type":
+                  "application/json",
                 "Content-Length": Buffer.byteLength(
                   payload
                 ),
@@ -185,7 +179,8 @@ function sleep(milliseconds: number): Promise<void> {
 
 export async function startBot(): Promise<void> {
   const token = getToken();
-  const provider = new BinanceHistoricalDataProvider();
+  const provider =
+    new BinanceHistoricalDataProvider();
 
   let offset = 0;
 
@@ -201,64 +196,21 @@ export async function startBot(): Promise<void> {
       for (const update of updates) {
         offset = update.update_id + 1;
 
-        const message = update.message;
-        const text = message?.text;
+        const outbound =
+          await handleTelegramUpdate(
+            update,
+            provider
+          );
 
-        if (
-          message === undefined ||
-          text === undefined
-        ) {
+        if (outbound === null) {
           continue;
         }
 
-        if (!text.startsWith("/")) {
-          continue;
-        }
-
-        const parts = text
-          .trim()
-          .split(/\s+/);
-
-        const command = parts[0]
-          ?.toLowerCase();
-
-        if (command === undefined) {
-          continue;
-        }
-
-        try {
-          let response: string;
-
-          if (command === "/signal") {
-            response = await handleSignalCommand(
-              parts.slice(1),
-              provider
-            );
-          } else {
-            response = handleCommand(command);
-          }
-
-          await sendMessage(
-            token,
-            message.chat.id,
-            response
-          );
-        } catch (error) {
-          console.error(
-            `Command failed: ${command}`,
-            error
-          );
-
-          await sendMessage(
-            token,
-            message.chat.id,
-            [
-              "TSD could not process that request.",
-              "",
-              "Check the symbol and timeframe, then try again."
-            ].join("\n")
-          );
-        }
+        await sendMessage(
+          token,
+          outbound.chatId,
+          outbound.text
+        );
       }
 
       await sleep(
